@@ -1470,6 +1470,38 @@ msgstr "双拼"
 msgid "Custom Shuangpin"
 msgstr "自定义双拼"
 
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "Xiaohe Shuangpin"
+msgstr "小鹤双拼"
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "MS Shuangpin"
+msgstr "微软双拼"
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "Ziguang Shuangpin"
+msgstr "紫光双拼"
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "GB Shuangpin"
+msgstr "国标双拼"
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "Ziranma Shuangpin"
+msgstr "自然码双拼"
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "ABC Shuangpin"
+msgstr "智能ABC双拼"
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "Zhongwenzhixing Shuangpin"
+msgstr "中文之星双拼"
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "PinyinJiajia Shuangpin"
+msgstr "拼音加加双拼"
+
 #: modules/pinyinhelper/pinyinhelper.conf.in.in:2
 msgid "Extra Pinyin functionality"
 msgstr "额外拼音功能"

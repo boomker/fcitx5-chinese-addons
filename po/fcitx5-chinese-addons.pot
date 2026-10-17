@@ -1397,6 +1397,38 @@ msgstr ""
 msgid "Custom Shuangpin"
 msgstr ""
 
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "Xiaohe Shuangpin"
+msgstr ""
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "MS Shuangpin"
+msgstr ""
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "Ziguang Shuangpin"
+msgstr ""
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "GB Shuangpin"
+msgstr ""
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "Ziranma Shuangpin"
+msgstr ""
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "ABC Shuangpin"
+msgstr ""
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "Zhongwenzhixing Shuangpin"
+msgstr ""
+
+#: im/pinyin/shuangpin-scheme.conf.in:2
+msgid "PinyinJiajia Shuangpin"
+msgstr ""
+
 #: modules/pinyinhelper/pinyinhelper.conf.in.in:2
 msgid "Extra Pinyin functionality"
 msgstr ""

@@ -93,13 +93,15 @@ enum class ShuangpinProfileEnum {
     Ziranma,
     ABC,
     Zhongwenzhixing,
-    PinyinJiajia
+    PinyinJiajia,
+    Custom
 };
 
 FCITX_CONFIG_ENUM_NAME_WITH_I18N(ShuangpinProfileEnum, N_("Xiaohe"), N_("MS"),
                                  N_("Ziguang"), N_("GB Standard"),
                                  N_("Ziranma"), N_("ABC"),
-                                 N_("Zhongwenzhixing"), N_("PinyinJiajia"))
+                                 N_("Zhongwenzhixing"), N_("PinyinJiajia"),
+                                 N_("Custom"))
 
 enum class PreeditMode { No, ComposingPinyin, CommitPreview };
 

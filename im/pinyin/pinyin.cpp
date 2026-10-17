@@ -129,8 +129,43 @@ builtinShuangpinProfile(ShuangpinProfileEnum profile) {
         return libime::ShuangpinBuiltinProfile::Zhongwenzhixing;
     case ShuangpinProfileEnum::PinyinJiajia:
         return libime::ShuangpinBuiltinProfile::PinyinJiajia;
+    case ShuangpinProfileEnum::Custom:
+        break;
     }
     return libime::ShuangpinBuiltinProfile::Ziranma;
+}
+
+struct BuiltinShuangpinEntry {
+    std::string_view uniqueName;
+    libime::ShuangpinBuiltinProfile profile;
+};
+
+constexpr BuiltinShuangpinEntry BuiltinShuangpinEntries[] = {
+    {"shuangpin-xiaohe", libime::ShuangpinBuiltinProfile::Xiaohe},
+    {"shuangpin-ms", libime::ShuangpinBuiltinProfile::MS},
+    {"shuangpin-ziguang", libime::ShuangpinBuiltinProfile::Ziguang},
+    {"shuangpin-gb", libime::ShuangpinBuiltinProfile::GB},
+    {"shuangpin-ziranma", libime::ShuangpinBuiltinProfile::Ziranma},
+    {"shuangpin-abc", libime::ShuangpinBuiltinProfile::ABC},
+    {"shuangpin-zhongwenzhixing",
+     libime::ShuangpinBuiltinProfile::Zhongwenzhixing},
+    {"shuangpin-pinyinjiajia", libime::ShuangpinBuiltinProfile::PinyinJiajia},
+};
+
+std::optional<libime::ShuangpinBuiltinProfile>
+builtinShuangpinProfileForEntry(std::string_view uniqueName) {
+    for (const auto &entry : BuiltinShuangpinEntries) {
+        if (entry.uniqueName == uniqueName) {
+            return entry.profile;
+        }
+    }
+    return std::nullopt;
+}
+
+bool isShuangpinEntry(const InputMethodEntry &entry) {
+    return entry.uniqueName() == ShuangpinUniqueName ||
+           entry.uniqueName() == CustomShuangpinUniqueName ||
+           builtinShuangpinProfileForEntry(entry.uniqueName()).has_value();
 }
 
 template <typename T>
@@ -1023,6 +1058,9 @@ PinyinEngine::PinyinEngine(Instance *instance)
             handle2nd3rdSelection(keyEvent);
         });
 
+    // Scheme selection moved to the input method add dialog. Keep the option
+    // loadable for migrating the legacy "shuangpin" entry, but do not show it.
+    config_.shuangpinProfile.annotation().setHidden(true);
     pyConfig_.shuangpinProfile.annotation().setHidden(true);
     pyConfig_.showShuangpinMode.annotation().setHidden(true);
     pyConfig_.fuzzyConfig->partialSp.annotation().setHidden(true);
@@ -1302,7 +1340,9 @@ void PinyinEngine::populateConfig() {
 }
 
 void PinyinEngine::applyShuangpinProfile(const InputMethodEntry &entry) {
-    if (entry.uniqueName() == CustomShuangpinUniqueName) {
+    if (entry.uniqueName() == CustomShuangpinUniqueName ||
+        (entry.uniqueName() == ShuangpinUniqueName &&
+         *config_.shuangpinProfile == ShuangpinProfileEnum::Custom)) {
         std::shared_ptr<libime::ShuangpinProfile> profile;
         auto file = StandardPaths::global().open(StandardPathsType::PkgConfig,
                                                  "pinyin/sp.dat");
@@ -1325,6 +1365,10 @@ void PinyinEngine::applyShuangpinProfile(const InputMethodEntry &entry) {
                 ime_->correctionProfile().get());
         }
         ime_->setShuangpinProfile(std::move(profile));
+    } else if (auto profile =
+                   builtinShuangpinProfileForEntry(entry.uniqueName())) {
+        ime_->setShuangpinProfile(std::make_shared<libime::ShuangpinProfile>(
+            *profile, ime_->correctionProfile().get()));
     } else if (entry.uniqueName() == ShuangpinUniqueName) {
         ime_->setShuangpinProfile(std::make_shared<libime::ShuangpinProfile>(
             builtinShuangpinProfile(*config_.shuangpinProfile),
@@ -1370,9 +1414,7 @@ void PinyinEngine::activate(const fcitx::InputMethodEntry &entry,
     inputContext->statusArea().addAction(StatusGroup::InputMethod,
                                          &predictionAction_);
     auto *state = inputContext->propertyFor(&factory_);
-    state->context_.setUseShuangpin(entry.uniqueName() == ShuangpinUniqueName ||
-                                    entry.uniqueName() ==
-                                        CustomShuangpinUniqueName);
+    state->context_.setUseShuangpin(isShuangpinEntry(entry));
     applyShuangpinProfile(entry);
     // TODO: use surrouding to re-build context.
     state->context_.clearContextWords();
@@ -2513,6 +2555,10 @@ std::string PinyinEngine::subMode(const InputMethodEntry &entry,
             return profile->name();
         }
         return _("Custom Shuangpin");
+    }
+    if (builtinShuangpinProfileForEntry(entry.uniqueName()) &&
+        *config_.showShuangpinMode) {
+        return entry.name();
     }
     if (entry.uniqueName() == ShuangpinUniqueName &&
         *config_.showShuangpinMode) {

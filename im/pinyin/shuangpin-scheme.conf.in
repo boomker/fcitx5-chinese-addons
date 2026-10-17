@@ -1,0 +1,7 @@
+[InputMethod]
+Name=@SHUANGPIN_NAME@
+Icon=fcitx-shuangpin
+Label=双
+LangCode=zh_CN
+Addon=pinyin
+Configurable=True

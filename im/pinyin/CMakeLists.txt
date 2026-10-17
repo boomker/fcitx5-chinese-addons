@@ -23,6 +23,32 @@ fcitx5_translate_desktop_file(shuangpin.conf.in shuangpin.conf)
 fcitx5_translate_desktop_file(shuangpin-custom.conf.in shuangpin-custom.conf)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/pinyin.conf" "${CMAKE_CURRENT_BINARY_DIR}/shuangpin.conf" "${CMAKE_CURRENT_BINARY_DIR}/shuangpin-custom.conf" DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5/inputmethod"
         COMPONENT config)
+
+# Each built-in Shuangpin scheme is a first-class input method entry, so users
+# can add several schemes side by side from the input method add dialog.
+set(SHUANGPIN_SCHEMES
+    "xiaohe|Xiaohe Shuangpin"
+    "ms|MS Shuangpin"
+    "ziguang|Ziguang Shuangpin"
+    "gb|GB Shuangpin"
+    "ziranma|Ziranma Shuangpin"
+    "abc|ABC Shuangpin"
+    "zhongwenzhixing|Zhongwenzhixing Shuangpin"
+    "pinyinjiajia|PinyinJiajia Shuangpin")
+set(SHUANGPIN_SCHEME_CONFS)
+foreach(SHUANGPIN_SCHEME IN LISTS SHUANGPIN_SCHEMES)
+    string(REPLACE "|" ";" SHUANGPIN_PARTS "${SHUANGPIN_SCHEME}")
+    list(GET SHUANGPIN_PARTS 0 SHUANGPIN_ID)
+    list(GET SHUANGPIN_PARTS 1 SHUANGPIN_NAME)
+    set(SHUANGPIN_TEMPLATE "${CMAKE_CURRENT_BINARY_DIR}/shuangpin-${SHUANGPIN_ID}.conf.in")
+    set(SHUANGPIN_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/shuangpin-${SHUANGPIN_ID}.conf")
+    configure_file(shuangpin-scheme.conf.in "${SHUANGPIN_TEMPLATE}" @ONLY)
+    fcitx5_translate_desktop_file("${SHUANGPIN_TEMPLATE}" "${SHUANGPIN_OUTPUT}")
+    list(APPEND SHUANGPIN_SCHEME_CONFS "${SHUANGPIN_OUTPUT}")
+endforeach()
+install(FILES ${SHUANGPIN_SCHEME_CONFS} DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5/inputmethod"
+        COMPONENT config)
+
 configure_file(pinyin-addon.conf.in.in pinyin-addon.conf.in)
 fcitx5_translate_desktop_file("${CMAKE_CURRENT_BINARY_DIR}/pinyin-addon.conf.in" pinyin-addon.conf)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/pinyin-addon.conf" RENAME pinyin.conf DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon"
