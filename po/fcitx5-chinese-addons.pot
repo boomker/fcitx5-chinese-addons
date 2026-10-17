@@ -1393,6 +1393,10 @@ msgstr ""
 msgid "Shuangpin"
 msgstr ""
 
+#: im/pinyin/shuangpin-custom.conf.in:2
+msgid "Custom Shuangpin"
+msgstr ""
+
 #: modules/pinyinhelper/pinyinhelper.conf.in.in:2
 msgid "Extra Pinyin functionality"
 msgstr ""

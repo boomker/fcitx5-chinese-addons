@@ -86,21 +86,20 @@ FCITX_CONFIG_ENUM_NAME_WITH_I18N(SwitchInputMethodBehavior, N_("Clear"),
                                  N_("Commit default selection"))
 
 enum class ShuangpinProfileEnum {
-    Ziranma,
+    Xiaohe,
     MS,
     Ziguang,
+    GB,
+    Ziranma,
     ABC,
     Zhongwenzhixing,
-    PinyinJiajia,
-    Xiaohe,
-    GB,
-    Custom
+    PinyinJiajia
 };
 
-FCITX_CONFIG_ENUM_NAME_WITH_I18N(ShuangpinProfileEnum, N_("Ziranma"), N_("MS"),
-                                 N_("Ziguang"), N_("ABC"),
-                                 N_("Zhongwenzhixing"), N_("PinyinJiajia"),
-                                 N_("Xiaohe"), N_("GB Standard"), N_("Custom"))
+FCITX_CONFIG_ENUM_NAME_WITH_I18N(ShuangpinProfileEnum, N_("Xiaohe"), N_("MS"),
+                                 N_("Ziguang"), N_("GB Standard"),
+                                 N_("Ziranma"), N_("ABC"),
+                                 N_("Zhongwenzhixing"), N_("PinyinJiajia"))
 
 enum class PreeditMode { No, ComposingPinyin, CommitPreview };
 
@@ -426,6 +425,7 @@ public:
         config_.load(config, true);
         safeSaveAsIni(config_, "conf/pinyin.conf");
         populateConfig();
+        applyCurrentShuangpinProfile();
     }
 
     void setSubConfig(const std::string &path,
@@ -477,6 +477,10 @@ private:
                                      std::string_view key);
 
     void populateConfig();
+
+    void applyShuangpinProfile(const InputMethodEntry &entry);
+
+    void applyCurrentShuangpinProfile();
 
     void updateForgetCandidate(InputContext *inputContext);
 

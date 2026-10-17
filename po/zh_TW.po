@@ -1468,6 +1468,10 @@ msgstr "五筆"
 msgid "Shuangpin"
 msgstr "雙拼"
 
+#: im/pinyin/shuangpin-custom.conf.in:2
+msgid "Custom Shuangpin"
+msgstr "自訂雙拼"
+
 #: modules/pinyinhelper/pinyinhelper.conf.in.in:2
 msgid "Extra Pinyin functionality"
 msgstr "額外拼音功能"

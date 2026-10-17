@@ -107,6 +107,32 @@ FCITX_DEFINE_LOG_CATEGORY(pinyin, "pinyin");
 #define PINYIN_DEBUG() FCITX_LOGC(pinyin, Debug)
 #define PINYIN_ERROR() FCITX_LOGC(pinyin, Error)
 
+constexpr std::string_view ShuangpinUniqueName = "shuangpin";
+constexpr std::string_view CustomShuangpinUniqueName = "shuangpin-custom";
+
+libime::ShuangpinBuiltinProfile
+builtinShuangpinProfile(ShuangpinProfileEnum profile) {
+    switch (profile) {
+    case ShuangpinProfileEnum::Xiaohe:
+        return libime::ShuangpinBuiltinProfile::Xiaohe;
+    case ShuangpinProfileEnum::MS:
+        return libime::ShuangpinBuiltinProfile::MS;
+    case ShuangpinProfileEnum::Ziguang:
+        return libime::ShuangpinBuiltinProfile::Ziguang;
+    case ShuangpinProfileEnum::GB:
+        return libime::ShuangpinBuiltinProfile::GB;
+    case ShuangpinProfileEnum::Ziranma:
+        return libime::ShuangpinBuiltinProfile::Ziranma;
+    case ShuangpinProfileEnum::ABC:
+        return libime::ShuangpinBuiltinProfile::ABC;
+    case ShuangpinProfileEnum::Zhongwenzhixing:
+        return libime::ShuangpinBuiltinProfile::Zhongwenzhixing;
+    case ShuangpinProfileEnum::PinyinJiajia:
+        return libime::ShuangpinBuiltinProfile::PinyinJiajia;
+    }
+    return libime::ShuangpinBuiltinProfile::Ziranma;
+}
+
 template <typename T>
 std::unique_ptr<CandidateList>
 predictCandidateList(PinyinEngine *engine, const std::vector<T> &words) {
@@ -1236,44 +1262,9 @@ void PinyinEngine::populateConfig() {
     }
     ime_->setFuzzyFlags(flags);
 
-    if (*config_.shuangpinProfile == ShuangpinProfileEnum::Custom) {
-        auto file = StandardPaths::global().open(StandardPathsType::PkgConfig,
-                                                 "pinyin/sp.dat");
-        if (file.isValid()) {
-            try {
-                IFDStreamBuf buffer(file.fd());
-                std::istream in(&buffer);
-                ime_->setShuangpinProfile(
-                    std::make_shared<libime::ShuangpinProfile>(
-                        in, ime_->correctionProfile().get()));
-            } catch (const std::exception &e) {
-                PINYIN_ERROR() << e.what();
-            }
-        } else {
-            PINYIN_ERROR() << "Failed to open shuangpin profile.";
-        }
-    } else {
-        libime::ShuangpinBuiltinProfile profile;
-#define TRANS_SP_PROFILE(PROFILE)                                              \
-    case ShuangpinProfileEnum::PROFILE:                                        \
-        profile = libime::ShuangpinBuiltinProfile::PROFILE;                    \
-        break;
-        switch (*config_.shuangpinProfile) {
-            TRANS_SP_PROFILE(Ziranma)
-            TRANS_SP_PROFILE(MS)
-            TRANS_SP_PROFILE(Ziguang)
-            TRANS_SP_PROFILE(ABC)
-            TRANS_SP_PROFILE(Zhongwenzhixing)
-            TRANS_SP_PROFILE(PinyinJiajia)
-            TRANS_SP_PROFILE(Xiaohe)
-            TRANS_SP_PROFILE(GB)
-        default:
-            profile = libime::ShuangpinBuiltinProfile::Ziranma;
-            break;
-        }
-        ime_->setShuangpinProfile(std::make_shared<libime::ShuangpinProfile>(
-            profile, ime_->correctionProfile().get()));
-    }
+    ime_->setShuangpinProfile(std::make_shared<libime::ShuangpinProfile>(
+        builtinShuangpinProfile(*config_.shuangpinProfile),
+        ime_->correctionProfile().get()));
 
     // Always set a profile to avoid crash.
     if (!ime_->shuangpinProfile()) {
@@ -1310,10 +1301,50 @@ void PinyinEngine::populateConfig() {
     pyConfig_ = config_;
 }
 
+void PinyinEngine::applyShuangpinProfile(const InputMethodEntry &entry) {
+    if (entry.uniqueName() == CustomShuangpinUniqueName) {
+        std::shared_ptr<libime::ShuangpinProfile> profile;
+        auto file = StandardPaths::global().open(StandardPathsType::PkgConfig,
+                                                 "pinyin/sp.dat");
+        if (file.isValid()) {
+            try {
+                IFDStreamBuf buffer(file.fd());
+                std::istream in(&buffer);
+                profile = std::make_shared<libime::ShuangpinProfile>(
+                    in, ime_->correctionProfile().get());
+            } catch (const std::exception &e) {
+                PINYIN_ERROR() << "Failed to load custom shuangpin profile: "
+                               << e.what();
+            }
+        } else {
+            PINYIN_ERROR() << "Failed to open shuangpin profile.";
+        }
+        if (!profile) {
+            profile = std::make_shared<libime::ShuangpinProfile>(
+                libime::ShuangpinBuiltinProfile::Ziranma,
+                ime_->correctionProfile().get());
+        }
+        ime_->setShuangpinProfile(std::move(profile));
+    } else if (entry.uniqueName() == ShuangpinUniqueName) {
+        ime_->setShuangpinProfile(std::make_shared<libime::ShuangpinProfile>(
+            builtinShuangpinProfile(*config_.shuangpinProfile),
+            ime_->correctionProfile().get()));
+    }
+}
+
 void PinyinEngine::reloadConfig() {
     PINYIN_DEBUG() << "Reload pinyin config.";
     readAsIni(config_, "conf/pinyin.conf");
     populateConfig();
+    applyCurrentShuangpinProfile();
+}
+
+void PinyinEngine::applyCurrentShuangpinProfile() {
+    if (auto *inputContext = instance_->mostRecentInputContext()) {
+        if (const auto *entry = instance_->inputMethodEntry(inputContext)) {
+            applyShuangpinProfile(*entry);
+        }
+    }
 }
 void PinyinEngine::activate(const fcitx::InputMethodEntry &entry,
                             fcitx::InputContextEvent &event) {
@@ -1339,7 +1370,10 @@ void PinyinEngine::activate(const fcitx::InputMethodEntry &entry,
     inputContext->statusArea().addAction(StatusGroup::InputMethod,
                                          &predictionAction_);
     auto *state = inputContext->propertyFor(&factory_);
-    state->context_.setUseShuangpin(entry.uniqueName() == "shuangpin");
+    state->context_.setUseShuangpin(entry.uniqueName() == ShuangpinUniqueName ||
+                                    entry.uniqueName() ==
+                                        CustomShuangpinUniqueName);
+    applyShuangpinProfile(entry);
     // TODO: use surrouding to re-build context.
     state->context_.clearContextWords();
 }
@@ -2472,8 +2506,16 @@ void PinyinEngine::save() {
 std::string PinyinEngine::subMode(const InputMethodEntry &entry,
                                   InputContext &inputContext) {
     FCITX_UNUSED(inputContext);
-    if (entry.uniqueName() == "shuangpin" && *config_.showShuangpinMode &&
-        *config_.shuangpinProfile != ShuangpinProfileEnum::Custom) {
+    if (entry.uniqueName() == CustomShuangpinUniqueName &&
+        *config_.showShuangpinMode) {
+        if (auto profile = ime_->shuangpinProfile();
+            profile && !profile->name().empty()) {
+            return profile->name();
+        }
+        return _("Custom Shuangpin");
+    }
+    if (entry.uniqueName() == ShuangpinUniqueName &&
+        *config_.showShuangpinMode) {
         return ShuangpinProfileEnumI18NAnnotation::toString(
             *config_.shuangpinProfile);
     }
