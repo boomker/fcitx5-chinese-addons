@@ -162,9 +162,19 @@ builtinShuangpinProfileForEntry(std::string_view uniqueName) {
     return std::nullopt;
 }
 
+// 自定义双拼方案的 uniqueName 可由用户修改（`shuangpin-<id>`），因此不能只比对
+// 固定的 `shuangpin-custom`：任何以 `shuangpin-` 开头且不属于内置方案的条目都按
+// 自定义双拼处理（同一时间只存在一个自定义方案，它们共用 pinyin/sp.dat）。
+constexpr std::string_view CustomShuangpinPrefix = "shuangpin-";
+
+bool isCustomShuangpinEntry(std::string_view uniqueName) {
+    return uniqueName.rfind(CustomShuangpinPrefix, 0) == 0 &&
+           !builtinShuangpinProfileForEntry(uniqueName).has_value();
+}
+
 bool isShuangpinEntry(const InputMethodEntry &entry) {
     return entry.uniqueName() == ShuangpinUniqueName ||
-           entry.uniqueName() == CustomShuangpinUniqueName ||
+           isCustomShuangpinEntry(entry.uniqueName()) ||
            builtinShuangpinProfileForEntry(entry.uniqueName()).has_value();
 }
 
@@ -1352,7 +1362,7 @@ void PinyinEngine::applyImeRuntime() {
 }
 
 void PinyinEngine::applyShuangpinProfile(const InputMethodEntry &entry) {
-    if (entry.uniqueName() == CustomShuangpinUniqueName ||
+    if (isCustomShuangpinEntry(entry.uniqueName()) ||
         (entry.uniqueName() == ShuangpinUniqueName &&
          *config_.shuangpinProfile == ShuangpinProfileEnum::Custom)) {
         std::shared_ptr<libime::ShuangpinProfile> profile;
@@ -2713,7 +2723,7 @@ void PinyinEngine::save() {
 std::string PinyinEngine::subMode(const InputMethodEntry &entry,
                                   InputContext &inputContext) {
     FCITX_UNUSED(inputContext);
-    if (entry.uniqueName() == CustomShuangpinUniqueName &&
+    if (isCustomShuangpinEntry(entry.uniqueName()) &&
         *config_.showShuangpinMode) {
         if (auto profile = ime_->shuangpinProfile();
             profile && !profile->name().empty()) {
