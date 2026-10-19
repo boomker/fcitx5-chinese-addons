@@ -108,7 +108,6 @@ FCITX_DEFINE_LOG_CATEGORY(pinyin, "pinyin");
 #define PINYIN_ERROR() FCITX_LOGC(pinyin, Error)
 
 constexpr std::string_view ShuangpinUniqueName = "shuangpin";
-constexpr std::string_view CustomShuangpinUniqueName = "shuangpin-custom";
 
 libime::ShuangpinBuiltinProfile
 builtinShuangpinProfile(ShuangpinProfileEnum profile) {
