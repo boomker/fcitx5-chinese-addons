@@ -529,7 +529,7 @@ msgstr "清空候选词并退格"
 
 #: im/pinyin/pinyin.h:120
 msgid "Backspace when not using on-screen keyboard"
-msgstr "不使用屏幕键盘时进行退格"
+msgstr "执行退格删字(实体键盘)"
 
 #: im/pinyin/pinyin.h:127
 msgid "None"

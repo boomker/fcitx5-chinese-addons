@@ -229,8 +229,7 @@ FCITX_CONFIGURATION(
         backspaceBehaviorOnPrediction{
             this, "BackspaceBehaviorOnPrediction",
             _("Backspace behavior on prediction"),
-            BackspaceBehaviorOnPrediction::
-                BackspaceWhenNotUsingOnScreenKeyboard};
+            BackspaceBehaviorOnPrediction::OnlyClearCandidates};
     OptionWithAnnotation<SwitchInputMethodBehavior,
                          SwitchInputMethodBehaviorI18NAnnotation>
         switchInputMethodBehavior{this, "SwitchInputMethodBehavior",

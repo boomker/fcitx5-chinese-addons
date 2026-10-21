@@ -531,7 +531,7 @@ msgstr "清空候選字詞並退格"
 
 #: im/pinyin/pinyin.h:120
 msgid "Backspace when not using on-screen keyboard"
-msgstr "不使用螢幕鍵盤時執行退格"
+msgstr "執行退格刪字(實體鍵盤)"
 
 #: im/pinyin/pinyin.h:127
 msgid "None"
