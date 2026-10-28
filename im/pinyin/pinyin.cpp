@@ -177,6 +177,10 @@ bool isShuangpinEntry(const InputMethodEntry &entry) {
            builtinShuangpinProfileForEntry(entry.uniqueName()).has_value();
 }
 
+bool isPerImConfigEntry(const InputMethodEntry &entry) {
+    return entry.uniqueName() == "pinyin" || isShuangpinEntry(entry);
+}
+
 template <typename T>
 std::unique_ptr<CandidateList>
 predictCandidateList(PinyinEngine *engine, const std::vector<T> &words) {
@@ -1045,12 +1049,12 @@ PinyinEngine::PinyinEngine(Instance *instance)
     predictionAction_.connect<SimpleAction::Activated>(
         [this](InputContext *ic) {
             std::string activeName;
-            auto *perIm = activeShuangpinConfig(&activeName);
+            auto *perIm = activePerImConfig(&activeName);
             auto *target = perIm ? perIm : &globalConfig_;
             target->predictionEnabled.setValue(!(*target->predictionEnabled));
             if (perIm) {
                 safeSaveAsIni(*perIm, StandardPathsType::PkgConfig,
-                              shuangpinConfigPath(activeName));
+                              perImConfigPath(activeName));
             } else {
                 safeSaveAsIni(globalConfig_, "conf/pinyin.conf");
             }
@@ -1075,14 +1079,11 @@ PinyinEngine::PinyinEngine(Instance *instance)
     // loadable for migrating the legacy "shuangpin" entry, but do not show it.
     config_.shuangpinProfile.annotation().setHidden(true);
     globalConfig_.shuangpinProfile.annotation().setHidden(true);
-    pyConfig_.shuangpinProfile.annotation().setHidden(true);
-    pyConfig_.showShuangpinMode.annotation().setHidden(true);
-    pyConfig_.fuzzyConfig->partialSp.annotation().setHidden(true);
 
     deferredPreload_ = instance_->eventLoop().addDeferEvent([this](
                                                                 EventSource *) {
         bool hasCloudPinyin = cloudpinyin() != nullptr;
-        for (auto *configPtr : {&config_, &pyConfig_, &globalConfig_}) {
+        for (auto *configPtr : {&config_, &globalConfig_}) {
             configPtr->cloudPinyinEnabled.annotation().setHidden(
                 !hasCloudPinyin);
             configPtr->cloudPinyinIndex.annotation().setHidden(!hasCloudPinyin);
@@ -1219,7 +1220,8 @@ void PinyinEngine::loadCustomPhrase() {
 void PinyinEngine::populateConfig() {
     if (*config_.firstRun) {
         config_.firstRun.setValue(false);
-        safeSaveAsIni(config_, "conf/pinyin.conf");
+        globalConfig_.firstRun.setValue(false);
+        safeSaveAsIni(globalConfig_, "conf/pinyin.conf");
         deferEvent_ = instance_->eventLoop().addDeferEvent([this](
                                                                EventSource *) {
             if (cloudpinyin() && !*config_.cloudPinyinEnabled &&
@@ -1248,7 +1250,7 @@ void PinyinEngine::populateConfig() {
                     [this](const std::string &action) {
                         if (action == "yes") {
                             for (auto *configPtr :
-                                 {&config_, &pyConfig_, &globalConfig_}) {
+                                 {&config_, &globalConfig_}) {
                                 configPtr->cloudPinyinEnabled.setValue(true);
                             }
                             save();
@@ -1261,10 +1263,6 @@ void PinyinEngine::populateConfig() {
         });
     }
     applyImeRuntime();
-
-    RawConfig pyRaw;
-    config_.save(pyRaw);
-    pyConfig_.load(pyRaw, false);
 }
 
 void PinyinEngine::applyImeRuntime() {
@@ -1402,14 +1400,15 @@ void PinyinEngine::reloadConfig() {
     readAsIni(config_, "conf/pinyin.conf");
     // Drop the per-IM caches, so that entries without their own config file
     // re-seed from the refreshed global defaults.
-    shuangpinConfigs_.clear();
+    perImConfigs_.clear();
     globalConfig_ = config_;
     populateConfig();
     applyCurrentShuangpinProfile();
-    // Re-apply the per-IM overlay for the active shuangpin input method.
+    // Re-apply the per-IM overlay for the active pinyin/shuangpin input
+    // method.
     if (auto *entry = activeInputMethodEntry();
-        entry && isShuangpinEntry(*entry)) {
-        config_ = ensureShuangpinConfig(entry->uniqueName());
+        entry && isPerImConfigEntry(*entry)) {
+        config_ = ensurePerImConfig(entry->uniqueName());
         applyImeRuntime();
         applyPredictionActionState(nullptr);
         applyCurrentShuangpinProfile();
@@ -1425,14 +1424,14 @@ void PinyinEngine::applyCurrentShuangpinProfile() {
 }
 
 std::filesystem::path
-PinyinEngine::shuangpinConfigPath(const std::string &uniqueName) const {
+PinyinEngine::perImConfigPath(const std::string &uniqueName) const {
     return stringutils::concat("conf/pinyin/", uniqueName, ".conf");
 }
 
 PinyinEngineConfig &
-PinyinEngine::ensureShuangpinConfig(const std::string &uniqueName) const {
-    auto it = shuangpinConfigs_.find(uniqueName);
-    if (it != shuangpinConfigs_.end()) {
+PinyinEngine::ensurePerImConfig(const std::string &uniqueName) const {
+    auto it = perImConfigs_.find(uniqueName);
+    if (it != perImConfigs_.end()) {
         return *it->second;
     }
 
@@ -1445,7 +1444,7 @@ PinyinEngine::ensureShuangpinConfig(const std::string &uniqueName) const {
     config.load(defaultRaw, false);
 
     if (auto file = StandardPaths::global().open(
-            StandardPathsType::PkgConfig, shuangpinConfigPath(uniqueName));
+            StandardPathsType::PkgConfig, perImConfigPath(uniqueName));
         file.isValid()) {
         RawConfig fileRaw;
         readFromIni(fileRaw, file.fd());
@@ -1454,8 +1453,13 @@ PinyinEngine::ensureShuangpinConfig(const std::string &uniqueName) const {
     }
 
     // Keep the annotation state in sync with what the constructor does for
-    // config_/pyConfig_.
+    // config_/globalConfig_.
     config.shuangpinProfile.annotation().setHidden(true);
+    if (uniqueName == "pinyin") {
+        // The plain pinyin entry has no shuangpin-specific options.
+        config.showShuangpinMode.annotation().setHidden(true);
+        config.fuzzyConfig->partialSp.annotation().setHidden(true);
+    }
     // cannot use the lazy FCITX_ADDON_DEPENDENCY_LOADER accessor here because
     // this method is const.
     bool hasCloudPinyin =
@@ -1466,7 +1470,7 @@ PinyinEngine::ensureShuangpinConfig(const std::string &uniqueName) const {
     config.keepCloudPinyinPlaceHolder.annotation().setHidden(!hasCloudPinyin);
     config.cloudpinyin.setHidden(!hasCloudPinyin);
 
-    shuangpinConfigs_[uniqueName] = std::move(configPtr);
+    perImConfigs_[uniqueName] = std::move(configPtr);
     return config;
 }
 
@@ -1477,15 +1481,15 @@ const InputMethodEntry *PinyinEngine::activeInputMethodEntry() const {
     return nullptr;
 }
 
-PinyinEngineConfig *PinyinEngine::activeShuangpinConfig(std::string *nameOut) {
+PinyinEngineConfig *PinyinEngine::activePerImConfig(std::string *nameOut) {
     const auto *entry = activeInputMethodEntry();
-    if (!entry || !isShuangpinEntry(*entry)) {
+    if (!entry || !isPerImConfigEntry(*entry)) {
         return nullptr;
     }
     if (nameOut) {
         *nameOut = entry->uniqueName();
     }
-    return &ensureShuangpinConfig(entry->uniqueName());
+    return &ensurePerImConfig(entry->uniqueName());
 }
 
 void PinyinEngine::applyPredictionActionState(InputContext *inputContext) {
@@ -1501,8 +1505,8 @@ void PinyinEngine::applyPredictionActionState(InputContext *inputContext) {
 }
 
 void PinyinEngine::applyActiveEntryConfig(const InputMethodEntry &entry) {
-    if (isShuangpinEntry(entry)) {
-        config_ = ensureShuangpinConfig(entry.uniqueName());
+    if (isPerImConfigEntry(entry)) {
+        config_ = ensurePerImConfig(entry.uniqueName());
     } else {
         config_ = globalConfig_;
     }
@@ -1514,13 +1518,15 @@ void PinyinEngine::applyActiveEntryConfig(const InputMethodEntry &entry) {
 void PinyinEngine::setConfig(const RawConfig &config) {
     globalConfig_.load(config, true);
     safeSaveAsIni(globalConfig_, "conf/pinyin.conf");
+    // Existing per-IM overrides stay on disk; drop the caches so they are
+    // re-seeded from the new global defaults and overlaid on next access.
+    perImConfigs_.clear();
     if (auto *entry = activeInputMethodEntry();
-        entry && isShuangpinEntry(*entry)) {
-        // The active shuangpin input method keeps its own config; only
-        // refresh the "pinyin" entry snapshot here.
-        RawConfig raw;
-        globalConfig_.save(raw);
-        pyConfig_.load(raw, false);
+        entry && isPerImConfigEntry(*entry)) {
+        config_ = ensurePerImConfig(entry->uniqueName());
+        applyImeRuntime();
+        applyPredictionActionState(nullptr);
+        applyCurrentShuangpinProfile();
         return;
     }
     config_ = globalConfig_;
@@ -1530,15 +1536,15 @@ void PinyinEngine::setConfig(const RawConfig &config) {
 
 void PinyinEngine::setConfigForInputMethod(const InputMethodEntry &entry,
                                            const RawConfig &config) {
-    if (!isShuangpinEntry(entry)) {
+    if (!isPerImConfigEntry(entry)) {
         setConfig(config);
         return;
     }
 
-    auto &imConfig = ensureShuangpinConfig(entry.uniqueName());
+    auto &imConfig = ensurePerImConfig(entry.uniqueName());
     imConfig.load(config, true);
     safeSaveAsIni(imConfig, StandardPathsType::PkgConfig,
-                  shuangpinConfigPath(entry.uniqueName()));
+                  perImConfigPath(entry.uniqueName()));
 
     // If the changed input method is the active one, apply it to the runtime
     // state immediately.
@@ -1546,6 +1552,7 @@ void PinyinEngine::setConfigForInputMethod(const InputMethodEntry &entry,
         active && active->uniqueName() == entry.uniqueName()) {
         config_ = imConfig;
         applyImeRuntime();
+        applyPredictionActionState(nullptr);
         applyCurrentShuangpinProfile();
     }
 }
@@ -1685,12 +1692,12 @@ bool PinyinEngine::handleCloudpinyinTrigger(KeyEvent &event) {
     if (cloudpinyin() && event.key().checkKeyList(
                              cloudpinyin()->call<ICloudPinyin::toggleKey>())) {
         std::string activeName;
-        auto *perIm = activeShuangpinConfig(&activeName);
+        auto *perIm = activePerImConfig(&activeName);
         auto *target = perIm ? perIm : &globalConfig_;
         target->cloudPinyinEnabled.setValue(!*target->cloudPinyinEnabled);
         if (perIm) {
             safeSaveAsIni(*perIm, StandardPathsType::PkgConfig,
-                          shuangpinConfigPath(activeName));
+                          perImConfigPath(activeName));
             config_ = *perIm;
         } else {
             config_ = globalConfig_;
@@ -2746,13 +2753,10 @@ const Configuration *PinyinEngine::getConfig() const { return &globalConfig_; }
 
 const Configuration *
 PinyinEngine::getConfigForInputMethod(const InputMethodEntry &entry) const {
-    // Hide shuangpin options.
-    if (entry.uniqueName() == "pinyin") {
-        return &pyConfig_;
-    }
-    // Each shuangpin input method owns an independent configuration.
-    if (isShuangpinEntry(entry)) {
-        return &ensureShuangpinConfig(entry.uniqueName());
+    // Each pinyin/shuangpin input method owns an independent configuration,
+    // seeded from the addon defaults on first access.
+    if (isPerImConfigEntry(entry)) {
+        return &ensurePerImConfig(entry.uniqueName());
     }
     return &globalConfig_;
 }

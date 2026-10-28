@@ -482,16 +482,15 @@ private:
 
     void applyCurrentShuangpinProfile();
 
-    // Per-shuangpin-input-method configuration support: each shuangpin entry
-    // ("shuangpin-custom" and the per-scheme builtins) stores its settings in
-    // "conf/pinyin/<uniqueName>.conf" under PkgConfig, independently from the
-    // global "conf/pinyin.conf".
+    // Per-input-method configuration support: pinyin and shuangpin entries
+    // store their settings in "conf/pinyin/<uniqueName>.conf" under PkgConfig,
+    // independently from the global "conf/pinyin.conf" (the addon default).
     std::filesystem::path
-    shuangpinConfigPath(const std::string &uniqueName) const;
+    perImConfigPath(const std::string &uniqueName) const;
     // Loads (or creates) the cached per-IM config. Mutable member map is used
     // so that the const getConfigForInputMethod() can lazily populate it.
     PinyinEngineConfig &
-    ensureShuangpinConfig(const std::string &uniqueName) const;
+    ensurePerImConfig(const std::string &uniqueName) const;
     // Applies runtime state derived from config_ (fuzzy flags, preedit mode,
     // dict flags, ...) to ime_. Expected to be called whenever config_ gains
     // new values.
@@ -503,8 +502,9 @@ private:
     void applyPredictionActionState(InputContext *inputContext);
     // The entry of the most recently active input context, may be null.
     const InputMethodEntry *activeInputMethodEntry() const;
-    // The per-IM config of the active input method iff it is a shuangpin IM.
-    PinyinEngineConfig *activeShuangpinConfig(std::string *uniqueNameOut);
+    // The per-IM config of the active input method iff it is a pinyin or
+    // shuangpin IM.
+    PinyinEngineConfig *activePerImConfig(std::string *uniqueNameOut);
 
     void updateForgetCandidate(InputContext *inputContext);
 
@@ -531,13 +531,12 @@ private:
 
     Instance *instance_;
     PinyinEngineConfig config_;
-    PinyinEngineConfig pyConfig_;
     // Pristine global config, the only source that is written back to
     // "conf/pinyin.conf". config_ may be temporarily overlaid with per-IM
-    // values for the active shuangpin input method.
+    // values for the active pinyin/shuangpin input method.
     PinyinEngineConfig globalConfig_;
     mutable std::unordered_map<std::string, std::unique_ptr<PinyinEngineConfig>>
-        shuangpinConfigs_;
+        perImConfigs_;
     std::unique_ptr<libime::PinyinIME> ime_;
     std::vector<std::regex> quickphraseTriggerRegex_;
     KeyList selectionKeys_;
