@@ -518,7 +518,7 @@ std::pair<Text, Text> PinyinEngine::preedit(InputContext *inputContext) const {
         if (*config_.preeditCursorPositionAtBeginning) {
             clientPreedit.setCursor(0);
         } else {
-            clientPreedit.setCursor(context.selectedSentence().size());
+            clientPreedit.setCursor(clientPreedit.textLength());
         }
         [[fallthrough]];
     case PreeditMode::No:
