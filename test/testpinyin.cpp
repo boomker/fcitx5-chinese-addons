@@ -354,6 +354,7 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
         const auto uuid =
             frontend->call<ITestFrontend::createInputContext>("grouped-raw");
         auto *ic = instance->inputContextManager().findByUUID(uuid);
+        ic->setCapabilityFlags(CapabilityFlag::Preedit);
         configureGroupedShuangpin(instance, ic, "Xiaohe");
         sendGroupedInput(frontend, ic, "ni");
         FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "bn io");
@@ -361,8 +362,10 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
         frontend->call<ITestFrontend::pushCommitExpectation>("BN IO");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
+        ic->setCapabilityFlags(CapabilityFlags{});
         sendGroupedInput(frontend, ic, "gp");
-        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "fg p");
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "fg p");
+        FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 4);
         frontend->call<ITestFrontend::pushCommitExpectation>("FG P");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
     });
