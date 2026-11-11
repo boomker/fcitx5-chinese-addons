@@ -356,10 +356,13 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
         auto *ic = instance->inputContextManager().findByUUID(uuid);
         configureGroupedShuangpin(instance, ic, "Xiaohe");
         sendGroupedInput(frontend, ic, "ni");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "bn io");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 5);
         frontend->call<ITestFrontend::pushCommitExpectation>("BN IO");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
         sendGroupedInput(frontend, ic, "gp");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "fg p");
         frontend->call<ITestFrontend::pushCommitExpectation>("FG P");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
     });

@@ -131,7 +131,8 @@ const std::unordered_map<char, char> &groupedKeyMapping() {
     return mapping;
 }
 
-std::string groupedInputText(std::string_view input, bool semicolon) {
+std::string groupedInputText(std::string_view input, bool semicolon,
+                             bool uppercase = true) {
     std::string result;
     for (auto chr : input) {
         if (!result.empty()) {
@@ -144,7 +145,7 @@ std::string groupedInputText(std::string_view input, bool semicolon) {
         } else {
             for (auto key : *iter) {
                 if (key != ';' || semicolon) {
-                    result += charutils::toupper(key);
+                    result += uppercase ? charutils::toupper(key) : key;
                 }
             }
         }
@@ -608,9 +609,9 @@ PinyinEngine::preeditWithCursor(const PinyinState &state) const {
     const auto cursor =
         text.size() +
         groupedInputText(input.substr(selected, context.cursor() - selected),
-                         semicolon)
+                         semicolon, false)
             .size();
-    text += groupedInputText(input.substr(selected), semicolon);
+    text += groupedInputText(input.substr(selected), semicolon, false);
     return {std::move(text), cursor};
 }
 
