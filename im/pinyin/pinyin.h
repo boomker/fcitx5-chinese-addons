@@ -380,6 +380,11 @@ public:
     PinyinState(PinyinEngine *engine);
 
     libime::PinyinContext context_;
+    // The ordinary IME profile stays shared; compact input overrides only
+    // this input context. Retain the projection until its source changes.
+    std::shared_ptr<const libime::ShuangpinProfile> groupedSourceProfile_;
+    std::shared_ptr<const libime::ShuangpinProfile> groupedProfile_;
+    bool groupedInput_ = false;
     bool lastIsPunc_ = false;
 
     PinyinMode mode_ = PinyinMode::Normal;
@@ -516,6 +521,9 @@ private:
 
     std::pair<Text, Text> preedit(InputContext *inputContext) const;
     std::string preeditCommitString(InputContext *inputContext) const;
+    std::pair<std::string, size_t>
+    preeditWithCursor(const PinyinState &state) const;
+    void setGroupedInput(InputContext *inputContext, bool grouped);
 
 #ifdef FCITX_HAS_LUA
     std::vector<std::string>

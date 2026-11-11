@@ -19,6 +19,7 @@
 #include "spell_public.h"
 #include "workerthread.h"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -108,6 +109,48 @@ FCITX_DEFINE_LOG_CATEGORY(pinyin, "pinyin");
 #define PINYIN_ERROR() FCITX_LOGC(pinyin, Error)
 
 constexpr std::string_view ShuangpinUniqueName = "shuangpin";
+
+// Non-text keysyms shared with Android's ShuangpinKeyboardLayout. Temporary
+// modes cannot turn these keys into Unicode characters if they intercept them.
+constexpr uint32_t GroupedKeyBase = 0x0200e000;
+constexpr uint32_t GroupedModeBase = 0x0200e100;
+constexpr std::array<std::string_view, 18> GroupedKeys = {
+    "q",  "we", "rt", "y",  "u", "io", "p", "a",  "sd",
+    "fg", "h",  "jk", "l;", "z", "xc", "v", "bn", "m"};
+
+const std::unordered_map<char, char> &groupedKeyMapping() {
+    static const auto mapping = [] {
+        std::unordered_map<char, char> result;
+        for (auto group : GroupedKeys) {
+            for (auto key : group) {
+                result.emplace(key, group.front());
+            }
+        }
+        return result;
+    }();
+    return mapping;
+}
+
+std::string groupedInputText(std::string_view input, bool semicolon) {
+    std::string result;
+    for (auto chr : input) {
+        if (!result.empty()) {
+            result += ' ';
+        }
+        auto iter = std::ranges::find_if(
+            GroupedKeys, [chr](auto group) { return group.front() == chr; });
+        if (iter == GroupedKeys.end()) {
+            result += chr;
+        } else {
+            for (auto key : *iter) {
+                if (key != ';' || semicolon) {
+                    result += charutils::toupper(key);
+                }
+            }
+        }
+    }
+    return result;
+}
 
 libime::ShuangpinBuiltinProfile
 builtinShuangpinProfile(ShuangpinProfileEnum profile) {
@@ -344,7 +387,7 @@ matchCloudPinyin(const libime::PinyinContext &context,
                 return std::nullopt;
             }
             sppinyin = libime::PinyinEncoder::shuangpinToPinyin(
-                sppinyin, *context.ime()->shuangpinProfile());
+                sppinyin, *context.shuangpinProfile());
             if (sppinyin.empty()) {
                 return std::nullopt;
             }
@@ -497,7 +540,7 @@ std::pair<Text, Text> PinyinEngine::preedit(InputContext *inputContext) const {
             : PreeditMode::No;
     // Use const ref to avoid accidentally change anything.
     const auto &context = state->context_;
-    auto preeditWithCursor = context.preeditWithCursor();
+    auto preeditWithCursor = this->preeditWithCursor(*state);
     // client preedit can be empty/pinyin/preview depends on config
     Text clientPreedit;
     Text preedit;
@@ -542,9 +585,61 @@ PinyinEngine::preeditCommitString(InputContext *inputContext) const {
     const auto &userInput = context.userInput();
     const auto selectedLength = context.selectedLength();
 
+    const auto remaining = std::string_view(userInput).substr(selectedLength);
     return context.selectedSentence() +
-           userInput.substr(selectedLength,
-                            userInput.length() - selectedLength);
+           (state->groupedInput_
+                ? groupedInputText(
+                      remaining,
+                      state->groupedSourceProfile_->validInput().contains(';'))
+                : std::string(remaining));
+}
+
+std::pair<std::string, size_t>
+PinyinEngine::preeditWithCursor(const PinyinState &state) const {
+    const auto &context = state.context_;
+    if (!state.groupedInput_) {
+        return context.preeditWithCursor();
+    }
+    const auto input = std::string_view(context.userInput());
+    const auto selected = context.selectedLength();
+    const bool semicolon =
+        state.groupedSourceProfile_->validInput().contains(';');
+    auto text = context.selectedSentence();
+    const auto cursor =
+        text.size() +
+        groupedInputText(input.substr(selected, context.cursor() - selected),
+                         semicolon)
+            .size();
+    text += groupedInputText(input.substr(selected), semicolon);
+    return {std::move(text), cursor};
+}
+
+void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped) {
+    auto *state = inputContext->propertyFor(&factory_);
+    const auto source = ime_->shuangpinProfile();
+    if (state->groupedInput_ == grouped &&
+        (!grouped || state->groupedSourceProfile_ == source)) {
+        return;
+    }
+    // Finish the old composition before changing its interpretation. This
+    // also handles a physical keyboard taking over from the compact layout.
+    if (!state->context_.empty()) {
+        const auto text = state->context_.candidates().empty()
+                              ? preeditCommitString(inputContext)
+                              : state->context_.sentence();
+        if (!text.empty()) {
+            inputContext->commitString(text);
+        }
+        doReset(inputContext);
+    }
+    if (grouped && state->groupedSourceProfile_ != source) {
+        state->groupedProfile_ = std::make_shared<libime::ShuangpinProfile>(
+            *source, groupedKeyMapping());
+        state->groupedSourceProfile_ = source;
+    }
+    state->context_.setShuangpinProfile(grouped ? state->groupedProfile_
+                                                : nullptr);
+    state->groupedInput_ = grouped;
 }
 
 void PinyinEngine::updatePreedit(InputContext *inputContext) const {
@@ -654,6 +749,9 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             customCandidateMap;
         /// Create custom phrase candidate {{{
         do {
+            if (state->groupedInput_) {
+                break;
+            }
             const auto *results = customPhrase_.lookup(pyBeforeCursor);
             if (!results) {
                 break;
@@ -710,7 +808,7 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         /// Create spell candidate {{{
         auto [parsedPy, parsedPyCursor] = state->context_.preeditWithCursor(
             libime::PinyinPreeditMode::RawText);
-        if (*config_.spellEnabled && spell() &&
+        if (!state->groupedInput_ && *config_.spellEnabled && spell() &&
             parsedPyCursor >= selectedSentence.size() &&
             selectedLength <= context.cursor()) {
             auto [hasUpper, engNess] =
@@ -754,8 +852,8 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         /// }}}
 
         /// Create stroke candidate {{{
-        if (*config_.strokeCandidateEnabled && pinyinhelper() &&
-            context.selectedLength() == 0 && fullResult &&
+        if (!state->groupedInput_ && *config_.strokeCandidateEnabled &&
+            pinyinhelper() && context.selectedLength() == 0 && fullResult &&
             isStroke(context.userInput())) {
             int limit = (context.userInput().size() + 4) / 5;
             limit = std::min(limit, 3);
@@ -1586,6 +1684,8 @@ void PinyinEngine::activate(const fcitx::InputMethodEntry &entry,
     applyPredictionActionState(inputContext);
     auto *state = inputContext->propertyFor(&factory_);
     state->context_.setUseShuangpin(isShuangpinEntry(entry));
+    state->context_.setShuangpinProfile(nullptr);
+    state->groupedInput_ = false;
     applyShuangpinProfile(entry);
     // TODO: use surrouding to re-build context.
     state->context_.clearContextWords();
@@ -2013,6 +2113,9 @@ void PinyinEngine::saveCustomPhrase() {
 void PinyinEngine::pinCustomPhrase(InputContext *inputContext,
                                    const std::string &customPhrase) {
     auto *state = inputContext->propertyFor(&factory_);
+    if (state->groupedInput_) {
+        return;
+    }
     auto &context = state->context_;
     // Precompute some values.
     const auto selectedLength = context.selectedLength();
@@ -2029,6 +2132,9 @@ void PinyinEngine::pinCustomPhrase(InputContext *inputContext,
 void PinyinEngine::deleteCustomPhrase(InputContext *inputContext,
                                       const std::string &customPhrase) {
     auto *state = inputContext->propertyFor(&factory_);
+    if (state->groupedInput_) {
+        return;
+    }
     auto &context = state->context_;
     // Precompute some values.
     const auto selectedLength = context.selectedLength();
@@ -2329,11 +2435,30 @@ void PinyinEngine::resetPredict(InputContext *inputContext) {
 }
 
 void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
-    FCITX_UNUSED(entry);
     PINYIN_DEBUG() << "Pinyin receive key: " << event.key() << " "
                    << event.isRelease();
     auto *inputContext = event.inputContext();
     auto *state = inputContext->propertyFor(&factory_);
+
+    const auto sym = event.key().sym();
+    const bool groupedKey = sym >= GroupedKeyBase &&
+                            sym < GroupedKeyBase + GroupedKeys.size();
+    const bool groupedMode =
+        sym == GroupedModeBase || sym == GroupedModeBase + 1;
+    if ((groupedKey || groupedMode) &&
+        (event.isRelease() || !event.isVirtual() || !isShuangpinEntry(entry) ||
+         event.key().hasModifier())) {
+        event.filterAndAccept();
+        return;
+    }
+    if (groupedMode) {
+        handlePuncCandidate(event);
+        resetPredict(inputContext);
+        setGroupedInput(inputContext, sym == GroupedModeBase + 1);
+        event.filterAndAccept();
+        updateUI(inputContext);
+        return;
+    }
 
     std::shared_future<uint32_t> keyChr =
         std::async(std::launch::deferred, [sym = event.key().sym()] {
@@ -2429,8 +2554,26 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
         }
     }
 
-    auto checkSp = [this, &keyChr](const KeyEvent &event, PinyinState *state) {
-        auto shuangpinProfile = ime_->shuangpinProfile();
+    if (groupedKey) {
+        setGroupedInput(inputContext, true);
+        const auto chr = GroupedKeys[sym - GroupedKeyBase].front();
+        const auto profile = state->context_.shuangpinProfile();
+        event.filterAndAccept();
+        if ((state->context_.empty() &&
+             profile->validInitial().contains(chr)) ||
+            (!state->context_.empty() && profile->validInput().contains(chr))) {
+            state->context_.type(std::string(1, chr));
+            updateUI(inputContext);
+        }
+        return;
+    }
+    if (state->groupedInput_ && (event.key().isLAZ() || event.key().isUAZ() ||
+                                 event.key().check(FcitxKey_semicolon))) {
+        setGroupedInput(inputContext, false);
+    }
+
+    auto checkSp = [&keyChr](const KeyEvent &event, PinyinState *state) {
+        auto shuangpinProfile = state->context_.shuangpinProfile();
         if (!state->context_.useShuangpin() || !shuangpinProfile ||
             !event.key().isSimple()) {
             return false;
@@ -2444,7 +2587,7 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
                 shuangpinProfile->validInitial().contains(chr));
     };
 
-    if (!event.key().hasModifier() && quickphrase() &&
+    if (!state->groupedInput_ && !event.key().hasModifier() && quickphrase() &&
         !quickphraseTriggerRegex_.empty() && !keyStr.get().empty() &&
         state->context_.selectedLength() == 0 &&
         state->context_.cursor() == state->context_.size()) {
@@ -2786,7 +2929,7 @@ void PinyinEngine::invokeActionImpl(const InputMethodEntry &entry,
 
     event.filter();
 
-    auto preeditWithCursor = context.preeditWithCursor();
+    auto preeditWithCursor = this->preeditWithCursor(*state);
     auto selectedSentence = context.selectedSentence();
     // The logic here need to match ::preedit()
     switch (*config_.preeditMode) {
@@ -2807,7 +2950,8 @@ void PinyinEngine::invokeActionImpl(const InputMethodEntry &entry,
             // it does not cancel any selection.
             context.setCursor(context.selectedLength());
             while (context.cursor() < context.size()) {
-                auto [preeditText, preeditCursor] = context.preeditWithCursor();
+                auto [preeditText, preeditCursor] =
+                    this->preeditWithCursor(*state);
                 if (utf8::length(preeditText.begin(),
                                  preeditText.begin() + preeditCursor) <
                     cursor) {
@@ -2816,7 +2960,7 @@ void PinyinEngine::invokeActionImpl(const InputMethodEntry &entry,
                     break;
                 }
             }
-            auto [preeditText, preeditCursor] = context.preeditWithCursor();
+            auto [preeditText, preeditCursor] = this->preeditWithCursor(*state);
             if (utf8::length(preeditText.begin(),
                              preeditText.begin() + preeditCursor) > cursor) {
                 state->context_.setCursor(context.cursor() - 1);

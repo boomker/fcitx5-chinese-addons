@@ -7,6 +7,7 @@
 #include "testdir.h"
 #include "testfrontend_public.h"
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <fcitx-config/rawconfig.h>
 #include <fcitx-utils/event.h>
@@ -21,7 +22,9 @@
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidateaction.h>
+#include <fcitx/globalconfig.h>
 #include <fcitx/inputcontext.h>
+#include <fcitx/inputmethodengine.h>
 #include <fcitx/inputmethodgroup.h>
 #include <fcitx/inputmethodmanager.h>
 #include <fcitx/inputpanel.h>
@@ -62,7 +65,9 @@ int findCandidateOrDie(InputContext *ic, std::string_view word) {
 
 void findAndSelectCandidate(InputContext *ic, std::string_view word) {
     auto candList = ic->inputPanel().candidateList();
-    candList->candidate(findCandidateOrDie(ic, word)).select(ic);
+    candList->toBulk()
+        ->candidateFromAll(findCandidateOrDie(ic, word))
+        .select(ic);
 }
 
 void sendControlSpace(AddonInstance *testfrontend, InputContext *ic) {
@@ -81,6 +86,9 @@ void sendControlSpace(AddonInstance *testfrontend, InputContext *ic) {
 
 void setup(Instance *instance) {
     instance->eventDispatcher().schedule([instance]() {
+        RawConfig hotkeys;
+        hotkeys.setValueByPath("Hotkey/TriggerKeys/0", "Control+space");
+        instance->globalConfig().load(hotkeys, true);
         auto *pinyin = instance->addonManager().addon("pinyin", true);
         FCITX_ASSERT(pinyin);
         auto defaultGroup = instance->inputMethodManager().currentGroup();
@@ -245,6 +253,306 @@ void testUppercase(Instance *instance) {
         testfrontend->call<ITestFrontend::keyEvent>(uuid, Key("n"), false);
         testfrontend->call<ITestFrontend::keyEvent>(uuid, Key("e"), false);
         testfrontend->call<ITestFrontend::keyEvent>(uuid, Key("space"), false);
+    });
+}
+
+void sendGroupedInput(AddonInstance *frontend, InputContext *ic,
+                      std::string_view input) {
+    constexpr std::array<std::string_view, 18> groups = {
+        "q",  "we", "rt", "y",  "u", "io", "p", "a",  "sd",
+        "fg", "h",  "jk", "l;", "z", "xc", "v", "bn", "m"};
+    for (char chr : input) {
+        if (chr == '\'') {
+            frontend->call<ITestFrontend::keyEvent>(
+                ic->uuid(), Key(FcitxKey_apostrophe, KeyState::Virtual), false);
+            continue;
+        }
+        const auto group = std::find_if(
+            groups.begin(), groups.end(), [chr](std::string_view letters) {
+                return letters.find(chr) != letters.npos;
+            });
+        FCITX_ASSERT(group != groups.end());
+        const auto index = std::distance(groups.begin(), group);
+        const Key key(static_cast<KeySym>(0x0200e000 + index),
+                      KeyState::Virtual);
+        FCITX_ASSERT(Key::keySymToUnicode(key.sym()) == 0);
+        FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(ic->uuid(),
+                                                                 key, false));
+        frontend->call<ITestFrontend::keyEvent>(ic->uuid(), key, true);
+    }
+}
+
+void configureGroupedShuangpin(Instance *instance, InputContext *ic,
+                               std::string_view profile) {
+    instance->setCurrentInputMethod(ic, "shuangpin", true);
+    RawConfig config;
+    config.setValueByPath("ShuangpinProfile", std::string(profile));
+    config.setValueByPath("Prediction", "False");
+    config.setValueByPath("PinyinInPreedit", "False");
+    config.setValueByPath("PreeditMode", "Composing pinyin");
+    instance->inputMethodEngine(ic)->setConfigForInputMethod(
+        *instance->inputMethodEntry(ic), config);
+    ic->reset();
+}
+
+void testGroupedShuangpinSchemes(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        for (const auto &[profile, nihao] :
+             {std::pair{"Xiaohe", "nihc"}, std::pair{"MS", "nihk"},
+              std::pair{"Ziranma", "nihk"}}) {
+            const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+                "grouped-scheme");
+            auto *ic = instance->inputContextManager().findByUUID(uuid);
+            configureGroupedShuangpin(instance, ic, profile);
+
+            sendGroupedInput(frontend, ic, nihao);
+            frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+            findAndSelectCandidate(ic, "你好");
+
+            sendGroupedInput(frontend, ic, "vsgo");
+            frontend->call<ITestFrontend::pushCommitExpectation>("中国");
+            findAndSelectCandidate(ic, "中国");
+
+            if (std::string_view(profile) == "MS") {
+                sendGroupedInput(frontend, ic, "y;");
+                frontend->call<ITestFrontend::pushCommitExpectation>("应");
+                findAndSelectCandidate(ic, "应");
+            }
+        }
+    });
+}
+
+void testGroupedShuangpinEditing(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "grouped-editing");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+
+        sendGroupedInput(frontend, ic, "nihv");
+        frontend->call<ITestFrontend::keyEvent>(
+            uuid, Key(FcitxKey_BackSpace, KeyState::Virtual), false);
+        sendGroupedInput(frontend, ic, "c");
+        frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+        findAndSelectCandidate(ic, "你好");
+
+        sendGroupedInput(frontend, ic, "ni'hc");
+        frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+        findAndSelectCandidate(ic, "你");
+        findAndSelectCandidate(ic, "好");
+    });
+}
+
+void testGroupedShuangpinRawCommit(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid =
+            frontend->call<ITestFrontend::createInputContext>("grouped-raw");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        sendGroupedInput(frontend, ic, "ni");
+        frontend->call<ITestFrontend::pushCommitExpectation>("BN IO");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+
+        sendGroupedInput(frontend, ic, "gp");
+        frontend->call<ITestFrontend::pushCommitExpectation>("FG P");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+    });
+}
+
+void testGroupedShuangpinPrivateKeyGuard(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "grouped-private-guard");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        const auto sym = static_cast<KeySym>(0x0200e000);
+        FCITX_ASSERT(
+            frontend->call<ITestFrontend::sendKeyEvent>(uuid, Key(sym), false));
+        FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(
+            uuid, Key(sym, KeyStates(KeyState::Virtual) | KeyState::Ctrl),
+            false));
+        FCITX_ASSERT(!ic->inputPanel().candidateList());
+
+        instance->setCurrentInputMethod(ic, "pinyin", true);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("n"), false);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("i"), false);
+        const auto preedit = ic->inputPanel().preedit().toString();
+        FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(
+            uuid, Key(sym, KeyState::Virtual), false));
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == preedit);
+        frontend->call<ITestFrontend::pushCommitExpectation>("ni");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+    });
+}
+
+void testGroupedShuangpinSyllableActions(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "grouped-syllable-actions");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        sendGroupedInput(frontend, ic, "ni");
+        auto *tabbed = ic->inputPanel().candidateList()->toTabbed();
+        FCITX_ASSERT(tabbed);
+        const auto actions = tabbed->tabActions();
+        const auto niAction = std::ranges::find_if(
+            actions, [](const auto &action) { return action.text() == "ni"; });
+        FCITX_ASSERT(niAction != actions.end());
+        tabbed->triggerTabAction(niAction->id());
+        frontend->call<ITestFrontend::pushCommitExpectation>("你");
+        findAndSelectCandidate(ic, "你");
+    });
+}
+
+void testGroupedShuangpinQuickPhraseBoundary(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "grouped-quickphrase-boundary");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        sendGroupedInput(frontend, ic, "ni");
+        const auto sentence =
+            ic->inputPanel().candidateList()->candidate(0).text().toString();
+        frontend->call<ITestFrontend::pushCommitExpectation>(sentence);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("@"), false);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("n"), false);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("i"), false);
+        frontend->call<ITestFrontend::pushCommitExpectation>("ni");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+    });
+}
+
+void testGroupedShuangpinQuickPhraseTempMode(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "grouped-quickphrase-tempmode");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        RawConfig config;
+        config.setValueByPath("QuickPhraseKey", "Control+semicolon");
+        instance->inputMethodEngine(ic)->setConfigForInputMethod(
+            *instance->inputMethodEntry(ic), config);
+        FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(
+            uuid, Key("Control+semicolon"), false));
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("x"), false);
+        sendGroupedInput(frontend, ic, "n");
+        frontend->call<ITestFrontend::pushCommitExpectation>("x");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+    });
+}
+
+void testGroupedShuangpinCustomPhraseBoundary(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "grouped-customphrase-boundary");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        sendGroupedInput(frontend, ic, "ni");
+        const auto *candidates = ic->inputPanel().candidateList().get();
+        const auto &candidate = candidates->toBulk()->candidateFromAll(
+            findCandidateOrDie(ic, "你"));
+        auto *actionable = candidates->toActionable();
+        FCITX_ASSERT(actionable);
+        const auto actions = actionable->candidateActions(candidate);
+        FCITX_ASSERT(std::ranges::none_of(actions, [](const auto &action) {
+            return action.id() == 1 || action.id() == 2;
+        }));
+        actionable->triggerAction(candidate, 1);
+        ic->reset();
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("b"), false);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("i"), false);
+        FCITX_ASSERT(findCandidate(ic, "你") < 0);
+        ic->reset();
+    });
+}
+
+void testGroupedShuangpinModeControl(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "grouped-mode-control");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        const Key grouped(static_cast<KeySym>(0x0200e101), KeyState::Virtual);
+        const Key normal(static_cast<KeySym>(0x0200e100), KeyState::Virtual);
+        FCITX_ASSERT(
+            frontend->call<ITestFrontend::sendKeyEvent>(uuid, grouped, false));
+        sendGroupedInput(frontend, ic, "nihc");
+        const auto preedit = ic->inputPanel().preedit().toString();
+        FCITX_ASSERT(
+            frontend->call<ITestFrontend::sendKeyEvent>(uuid, grouped, false));
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == preedit);
+        const auto sentence =
+            ic->inputPanel().candidateList()->candidate(0).text().toString();
+        frontend->call<ITestFrontend::pushCommitExpectation>(sentence);
+        FCITX_ASSERT(
+            frontend->call<ITestFrontend::sendKeyEvent>(uuid, normal, false));
+        FCITX_ASSERT(!frontend->call<ITestFrontend::sendKeyEvent>(
+            uuid, Key("space"), false));
+        FCITX_ASSERT(!frontend->call<ITestFrontend::sendKeyEvent>(
+            uuid, Key("BackSpace"), false));
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("n"), false);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("i"), false);
+        frontend->call<ITestFrontend::pushCommitExpectation>("ni");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+    });
+}
+
+void testGroupedShuangpinHardwareSwitch(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "grouped-hardware");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        sendGroupedInput(frontend, ic, "nihc");
+        const auto sentence =
+            ic->inputPanel().candidateList()->candidate(0).text().toString();
+        frontend->call<ITestFrontend::pushCommitExpectation>(sentence);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("n"), false);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("i"), false);
+        frontend->call<ITestFrontend::pushCommitExpectation>("ni");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+
+        sendGroupedInput(frontend, ic, "nihc");
+        frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+        findAndSelectCandidate(ic, "你好");
+    });
+}
+
+void testGroupedShuangpinContextIsolation(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto firstUuid =
+            frontend->call<ITestFrontend::createInputContext>(
+                "grouped-context-1");
+        const auto secondUuid =
+            frontend->call<ITestFrontend::createInputContext>(
+                "grouped-context-2");
+        auto *first = instance->inputContextManager().findByUUID(firstUuid);
+        auto *second = instance->inputContextManager().findByUUID(secondUuid);
+        configureGroupedShuangpin(instance, first, "Xiaohe");
+        instance->setCurrentInputMethod(second, "shuangpin", true);
+        first->focusIn();
+        second->focusIn();
+
+        sendGroupedInput(frontend, first, "nihc");
+        frontend->call<ITestFrontend::keyEvent>(secondUuid, Key("n"), false);
+        frontend->call<ITestFrontend::keyEvent>(secondUuid, Key("i"), false);
+        frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+        findAndSelectCandidate(first, "你好");
+        frontend->call<ITestFrontend::pushCommitExpectation>("ni");
+        frontend->call<ITestFrontend::keyEvent>(secondUuid, Key("Return"),
+                                                false);
     });
 }
 
@@ -674,7 +982,9 @@ void testPunctuationPart2(Instance *instance) {
 
 } // namespace
 
-int main() {
+int main(int argc, char **testArgs) {
+    const bool groupedOnly =
+        argc > 1 && std::string_view(testArgs[1]) == "--grouped-shuangpin";
     setupTestingEnvironment(
         TESTING_BINARY_DIR, {"bin"},
         {TESTING_BINARY_DIR "/test", TESTING_BINARY_DIR "/im",
@@ -690,9 +1000,36 @@ int main() {
     Instance instance(FCITX_ARRAY_SIZE(argv), argv);
     instance.addonManager().registerDefaultLoader(nullptr);
     setup(&instance);
+    if (groupedOnly) {
+        testGroupedShuangpinSchemes(&instance);
+        testGroupedShuangpinEditing(&instance);
+        testGroupedShuangpinRawCommit(&instance);
+        testGroupedShuangpinPrivateKeyGuard(&instance);
+        testGroupedShuangpinSyllableActions(&instance);
+        testGroupedShuangpinQuickPhraseBoundary(&instance);
+        testGroupedShuangpinQuickPhraseTempMode(&instance);
+        testGroupedShuangpinCustomPhraseBoundary(&instance);
+        testGroupedShuangpinModeControl(&instance);
+        testGroupedShuangpinHardwareSwitch(&instance);
+        testGroupedShuangpinContextIsolation(&instance);
+        instance.eventDispatcher().schedule([&instance]() { instance.exit(); });
+        instance.exec();
+        return 0;
+    }
     testBasic(&instance);
     testSelectByChar(&instance);
     testUppercase(&instance);
+    testGroupedShuangpinSchemes(&instance);
+    testGroupedShuangpinEditing(&instance);
+    testGroupedShuangpinRawCommit(&instance);
+    testGroupedShuangpinPrivateKeyGuard(&instance);
+    testGroupedShuangpinSyllableActions(&instance);
+    testGroupedShuangpinQuickPhraseBoundary(&instance);
+    testGroupedShuangpinQuickPhraseTempMode(&instance);
+    testGroupedShuangpinCustomPhraseBoundary(&instance);
+    testGroupedShuangpinModeControl(&instance);
+    testGroupedShuangpinHardwareSwitch(&instance);
+    testGroupedShuangpinContextIsolation(&instance);
     testForget(&instance);
     testActionInStrokeFilter(&instance);
     testPinyinTabFilter(&instance);

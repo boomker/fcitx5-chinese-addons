@@ -86,7 +86,7 @@ bestMatchPinyin(std::string_view pinyin, std::string_view candidatePinyin,
     libime::MatchedPinyinSyllablesWithFuzzyFlags syls;
     syls = context.useShuangpin()
                ? libime::PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
-                     pinyin, *context.ime()->shuangpinProfile(),
+                     pinyin, *context.shuangpinProfile(),
                      context.ime()->fuzzyFlags())
                : libime::PinyinEncoder::stringToSyllablesWithFuzzyFlags(
                      pinyin, context.ime()->correctionProfile().get(),
@@ -418,6 +418,11 @@ std::vector<CandidateAction> PinyinActionableCandidateList::candidateActions(
         action.setId(PINYIN_FORGET);
         action.setText(_("Forget candidate"));
         result.push_back(std::move(action));
+    }
+    // Compact keys are not ordinary custom-phrase shortcuts. Saving their
+    // representative bytes would override unrelated 26-key shortcuts.
+    if (inputContext_->propertyFor(&engine_->factory())->groupedInput_) {
+        return result;
     }
     // If it's not custom phrase, or order is not at the top.
     const auto *customPhrase =
