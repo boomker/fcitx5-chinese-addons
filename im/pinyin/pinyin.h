@@ -384,6 +384,8 @@ public:
     // this input context. Retain the projection until its source changes.
     std::shared_ptr<const libime::ShuangpinProfile> groupedSourceProfile_;
     std::shared_ptr<const libime::ShuangpinProfile> groupedProfile_;
+    // Exact source spellings, keyed by encoded syllable + grouped input.
+    std::unordered_map<std::string, std::string> groupedPreeditCodes_;
     bool groupedInput_ = false;
     bool lastIsPunc_ = false;
 
@@ -522,7 +524,7 @@ private:
     std::pair<Text, Text> preedit(InputContext *inputContext) const;
     std::string preeditCommitString(InputContext *inputContext) const;
     std::pair<std::string, size_t>
-    preeditWithCursor(const PinyinState &state) const;
+    preeditWithCursor(InputContext *inputContext) const;
     void setGroupedInput(InputContext *inputContext, bool grouped);
 
 #ifdef FCITX_HAS_LUA

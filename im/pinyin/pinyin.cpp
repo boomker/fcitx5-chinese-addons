@@ -80,6 +80,7 @@
 #include <libime/pinyin/pinyinprediction.h>
 #include <libime/pinyin/shuangpinprofile.h>
 #include <list>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -151,6 +152,13 @@ std::string groupedInputText(std::string_view input, bool semicolon,
         }
     }
     return result;
+}
+
+std::string groupedPreeditCodeKey(std::string_view input,
+                                  libime::PinyinInitial initial,
+                                  libime::PinyinFinal final) {
+    return std::string{static_cast<char>(initial), static_cast<char>(final)} +
+           std::string(input);
 }
 
 libime::ShuangpinBuiltinProfile
@@ -541,7 +549,7 @@ std::pair<Text, Text> PinyinEngine::preedit(InputContext *inputContext) const {
             : PreeditMode::No;
     // Use const ref to avoid accidentally change anything.
     const auto &context = state->context_;
-    auto preeditWithCursor = this->preeditWithCursor(*state);
+    auto preeditWithCursor = this->preeditWithCursor(inputContext);
     // client preedit can be empty/pinyin/preview depends on config
     Text clientPreedit;
     Text preedit;
@@ -596,23 +604,142 @@ PinyinEngine::preeditCommitString(InputContext *inputContext) const {
 }
 
 std::pair<std::string, size_t>
-PinyinEngine::preeditWithCursor(const PinyinState &state) const {
-    const auto &context = state.context_;
-    if (!state.groupedInput_) {
+PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
+    const auto *state = inputContext->propertyFor(&factory_);
+    const auto &context = state->context_;
+    if (!state->groupedInput_) {
         return context.preeditWithCursor();
     }
     const auto input = std::string_view(context.userInput());
     const auto selected = context.selectedLength();
     const bool semicolon =
-        state.groupedSourceProfile_->validInput().contains(';');
+        state->groupedSourceProfile_->validInput().contains(';');
+
+    struct Syllable {
+        size_t end;
+        libime::PinyinInitial initial;
+        libime::PinyinFinal final;
+    };
+    std::map<size_t, Syllable> syllables;
+    const auto collect = [&input,
+                          selected](const libime::SentenceResult &result) {
+        std::map<size_t, Syllable> spans;
+        for (const auto *node : result.sentence()) {
+            const auto encoded = std::string_view(
+                node->as<libime::PinyinLatticeNode>().encodedPinyin());
+            size_t syllableIndex = 0;
+            const auto &path = node->path();
+            for (size_t i = 1; i < path.size(); ++i) {
+                auto from = selected + path[i - 1]->index();
+                auto to = selected + path[i]->index();
+                if (to > input.size()) {
+                    continue;
+                }
+                // Separators belong to the path, but carry no encoded syllable.
+                while (from < to && input[from] == '\'') {
+                    ++from;
+                }
+                while (to > from && input[to - 1] == '\'') {
+                    --to;
+                }
+                if (from == to) {
+                    continue;
+                }
+                if (syllableIndex * 2 + 2 <= encoded.size()) {
+                    spans.emplace(
+                        from, Syllable{to,
+                                       static_cast<libime::PinyinInitial>(
+                                           encoded[syllableIndex * 2]),
+                                       static_cast<libime::PinyinFinal>(
+                                           encoded[syllableIndex * 2 + 1])});
+                }
+                ++syllableIndex;
+            }
+        }
+        return spans;
+    };
+    if (!context.candidates().empty()) {
+        syllables = collect(context.candidates()[0]);
+    }
+    // Filtering changes the visible candidates rather than the decoder's best
+    // sentence. Use the visible prefix, retaining the decoded trailing input.
+    if (auto *tabbed = currentPinyinTabbed(inputContext);
+        tabbed && tabbed->hasFilter()) {
+        const auto list = inputContext->inputPanel().candidateList();
+        if (list && !list->empty()) {
+            const auto *candidate =
+                dynamic_cast<const PinyinCandidateIndexInterface *>(
+                    &list->candidate(0));
+            const auto &candidates = context.candidatesToCursor();
+            if (candidate && candidate->candidateIndex() >= 0 &&
+                static_cast<size_t>(candidate->candidateIndex()) <
+                    candidates.size()) {
+                const auto &visible = candidates[candidate->candidateIndex()];
+                if (!visible.sentence().empty()) {
+                    const auto end =
+                        selected + visible.sentence().back()->to()->index();
+                    syllables.erase(syllables.begin(),
+                                    syllables.lower_bound(end));
+                    const auto prefix = collect(visible);
+                    syllables.insert(prefix.begin(), prefix.end());
+                }
+            }
+        }
+    }
+
     auto text = context.selectedSentence();
-    const auto cursor =
-        text.size() +
-        groupedInputText(input.substr(selected, context.cursor() - selected),
-                         semicolon, false)
-            .size();
-    text += groupedInputText(input.substr(selected), semicolon, false);
-    return {std::move(text), cursor};
+    std::vector<size_t> cursorPositions(input.size() + 1, text.size());
+    bool previousSyllable = false;
+    for (size_t from = selected; from < input.size();) {
+        size_t to = from + 1;
+        std::string shown;
+        size_t initialLength = 0;
+        if (input[from] == '\'') {
+            shown = "'";
+        } else if (const auto span = syllables.find(from);
+                   span != syllables.end()) {
+            to = span->second.end;
+            const auto &syllable = span->second;
+            const auto code = input.substr(from, to - from);
+            const auto final = code.size() == 1 ? libime::PinyinFinal::Invalid
+                                                : syllable.final;
+            if (*config_.showActualPinyinInPreedit) {
+                shown = libime::PinyinEncoder::initialFinalToPinyinString(
+                    syllable.initial, final);
+                initialLength =
+                    libime::PinyinEncoder::initialToString(syllable.initial)
+                        .size();
+            } else {
+                const auto key =
+                    groupedPreeditCodeKey(code, syllable.initial, final);
+                if (const auto spelling = state->groupedPreeditCodes_.find(key);
+                    spelling != state->groupedPreeditCodes_.end()) {
+                    shown = spelling->second;
+                }
+            }
+        }
+        if (shown.empty()) {
+            shown = groupedInputText(input.substr(from, to - from), semicolon,
+                                     false);
+        }
+        const bool isSyllable = input[from] != '\'';
+        if (previousSyllable && isSyllable) {
+            text += ' ';
+        }
+        const auto start = text.size();
+        text += shown;
+        for (size_t at = from + 1; at <= to; ++at) {
+            const auto offset =
+                at == to ? shown.size()
+                : *config_.showActualPinyinInPreedit && initialLength
+                    ? std::min(initialLength, shown.size())
+                    : std::min(at - from, shown.size());
+            cursorPositions[at] = start + offset;
+        }
+        previousSyllable = isSyllable;
+        from = to;
+    }
+    return {std::move(text), cursorPositions[context.cursor()]};
 }
 
 void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped) {
@@ -637,6 +764,28 @@ void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped) {
         state->groupedProfile_ = std::make_shared<libime::ShuangpinProfile>(
             *source, groupedKeyMapping());
         state->groupedSourceProfile_ = source;
+        state->groupedPreeditCodes_.clear();
+        for (const auto &[code, syllables] : source->table()) {
+            std::string mapped;
+            for (const auto key : code) {
+                const auto group = groupedKeyMapping().find(key);
+                if (group == groupedKeyMapping().end()) {
+                    break;
+                }
+                mapped += group->second;
+            }
+            if (mapped.size() != code.size()) {
+                continue;
+            }
+            for (const auto &[syllable, flags] : syllables) {
+                if (flags == libime::PinyinFuzzyFlag::None) {
+                    state->groupedPreeditCodes_.try_emplace(
+                        groupedPreeditCodeKey(mapped, syllable.initial(),
+                                              syllable.final()),
+                        code);
+                }
+            }
+        }
     }
     state->context_.setShuangpinProfile(grouped ? state->groupedProfile_
                                                 : nullptr);
@@ -1990,7 +2139,6 @@ void PinyinEngine::updateFilter(InputContext *inputContext) {
     auto &inputPanel = inputContext->inputPanel();
     auto *pinyinTabbed = currentPinyinTabbed(inputContext);
 
-    updatePreedit(inputContext);
     Text aux;
     if (pinyinTabbed && pinyinTabbed->inStrokeFilterMode() && pinyinhelper()) {
         aux.append(_("[Stroke Filtering]"));
@@ -2016,6 +2164,7 @@ void PinyinEngine::updateFilter(InputContext *inputContext) {
             candidateList->setPage(0);
         }
     }
+    updatePreedit(inputContext);
     inputContext->updatePreedit();
     inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
 }
@@ -2930,7 +3079,7 @@ void PinyinEngine::invokeActionImpl(const InputMethodEntry &entry,
 
     event.filter();
 
-    auto preeditWithCursor = this->preeditWithCursor(*state);
+    auto preeditWithCursor = this->preeditWithCursor(inputContext);
     auto selectedSentence = context.selectedSentence();
     // The logic here need to match ::preedit()
     switch (*config_.preeditMode) {
@@ -2952,7 +3101,7 @@ void PinyinEngine::invokeActionImpl(const InputMethodEntry &entry,
             context.setCursor(context.selectedLength());
             while (context.cursor() < context.size()) {
                 auto [preeditText, preeditCursor] =
-                    this->preeditWithCursor(*state);
+                    this->preeditWithCursor(inputContext);
                 if (utf8::length(preeditText.begin(),
                                  preeditText.begin() + preeditCursor) <
                     cursor) {
@@ -2961,7 +3110,8 @@ void PinyinEngine::invokeActionImpl(const InputMethodEntry &entry,
                     break;
                 }
             }
-            auto [preeditText, preeditCursor] = this->preeditWithCursor(*state);
+            auto [preeditText, preeditCursor] =
+                this->preeditWithCursor(inputContext);
             if (utf8::length(preeditText.begin(),
                              preeditText.begin() + preeditCursor) > cursor) {
                 state->context_.setCursor(context.cursor() - 1);

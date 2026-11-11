@@ -332,6 +332,7 @@ void testGroupedShuangpinEditing(Instance *instance) {
         const auto uuid = frontend->call<ITestFrontend::createInputContext>(
             "grouped-editing");
         auto *ic = instance->inputContextManager().findByUUID(uuid);
+        ic->setCapabilityFlags(CapabilityFlag::Preedit);
         configureGroupedShuangpin(instance, ic, "Xiaohe");
 
         sendGroupedInput(frontend, ic, "nihv");
@@ -344,6 +345,10 @@ void testGroupedShuangpinEditing(Instance *instance) {
         sendGroupedInput(frontend, ic, "ni'hc");
         frontend->call<ITestFrontend::pushCommitExpectation>("你好");
         findAndSelectCandidate(ic, "你");
+        // A selected word does not consume the user's explicit boundary.
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "你'hc");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() ==
+                     std::string("你'hc").size());
         findAndSelectCandidate(ic, "好");
     });
 }
@@ -357,13 +362,14 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
         ic->setCapabilityFlags(CapabilityFlag::Preedit);
         configureGroupedShuangpin(instance, ic, "Xiaohe");
         sendGroupedInput(frontend, ic, "ni");
-        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "bn io");
-        FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 5);
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 2);
         frontend->call<ITestFrontend::pushCommitExpectation>("BN IO");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
         ic->setCapabilityFlags(CapabilityFlags{});
         sendGroupedInput(frontend, ic, "gp");
+        // No exact source spelling exists for this candidate's grouped prefix.
         FCITX_ASSERT(ic->inputPanel().preedit().toString() == "fg p");
         FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 4);
         frontend->call<ITestFrontend::pushCommitExpectation>("FG P");
@@ -404,17 +410,119 @@ void testGroupedShuangpinSyllableActions(Instance *instance) {
         const auto uuid = frontend->call<ITestFrontend::createInputContext>(
             "grouped-syllable-actions");
         auto *ic = instance->inputContextManager().findByUUID(uuid);
+        ic->setCapabilityFlags(CapabilityFlag::Preedit);
         configureGroupedShuangpin(instance, ic, "Xiaohe");
-        sendGroupedInput(frontend, ic, "ni");
+        sendGroupedInput(frontend, ic, "nihc");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni hc");
         auto *tabbed = ic->inputPanel().candidateList()->toTabbed();
         FCITX_ASSERT(tabbed);
         const auto actions = tabbed->tabActions();
         const auto niAction = std::ranges::find_if(
             actions, [](const auto &action) { return action.text() == "ni"; });
         FCITX_ASSERT(niAction != actions.end());
+        const auto biAction = std::ranges::find_if(
+            actions, [](const auto &action) { return action.text() == "bi"; });
+        FCITX_ASSERT(biAction != actions.end());
+        tabbed->triggerTabAction(biAction->id());
+        FCITX_ASSERT(
+            ic->inputPanel().clientPreedit().toString().starts_with("bi"));
+        tabbed->triggerTabAction(biAction->id());
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni hc");
         tabbed->triggerTabAction(niAction->id());
-        frontend->call<ITestFrontend::pushCommitExpectation>("你");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni hc");
+        frontend->call<ITestFrontend::pushCommitExpectation>("你好");
         findAndSelectCandidate(ic, "你");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "你hc")
+            << ic->inputPanel().clientPreedit().toString();
+        findAndSelectCandidate(ic, "好");
+    });
+}
+
+void testGroupedShuangpinPreeditModes(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        for (const auto &[profile, code] :
+             {std::pair{"Xiaohe", "nihc"}, std::pair{"MS", "nihk"},
+              std::pair{"Ziranma", "nihk"}}) {
+            const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+                "grouped-preedit-mode");
+            auto *ic = instance->inputContextManager().findByUUID(uuid);
+            ic->setCapabilityFlags(CapabilityFlag::Preedit);
+            configureGroupedShuangpin(instance, ic, profile);
+            sendGroupedInput(frontend, ic, "n");
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "n");
+            sendGroupedInput(frontend, ic, "i");
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni");
+            sendGroupedInput(frontend, ic, "h");
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni h");
+            sendGroupedInput(frontend, ic, std::string_view(code).substr(3));
+            const auto expectedCode =
+                std::string("ni ") +
+                std::string(std::string_view(code).substr(2));
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                         expectedCode);
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 5);
+            frontend->call<ITestFrontend::keyEvent>(uuid, Key("Left"), false);
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 4);
+            frontend->call<ITestFrontend::keyEvent>(uuid, Key("Left"), false);
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 2);
+            frontend->call<ITestFrontend::keyEvent>(uuid, Key("Home"), false);
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 0);
+            frontend->call<ITestFrontend::keyEvent>(uuid, Key("End"), false);
+            ic->reset();
+
+            RawConfig config;
+            config.setValueByPath("PinyinInPreedit", "True");
+            instance->inputMethodEngine(ic)->setConfigForInputMethod(
+                *instance->inputMethodEntry(ic), config);
+            sendGroupedInput(frontend, ic, code);
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                         "ni hao");
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 6);
+            auto *tabbed = ic->inputPanel().candidateList()->toTabbed();
+            const auto actions = tabbed->tabActions();
+            const auto bi =
+                std::ranges::find_if(actions, [](const auto &action) {
+                    return action.text() == "bi";
+                });
+            FCITX_ASSERT(bi != actions.end());
+            tabbed->triggerTabAction(bi->id());
+            FCITX_ASSERT(
+                ic->inputPanel().clientPreedit().toString().starts_with("bi"));
+            tabbed->triggerTabAction(bi->id());
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                         "ni hao");
+            frontend->call<ITestFrontend::keyEvent>(uuid, Key("Left"), false);
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 4);
+            ic->reset();
+
+            if (std::string_view(profile) == "MS") {
+                sendGroupedInput(frontend, ic, "y;");
+                FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                             "ying");
+                ic->reset();
+                config.setValueByPath("PinyinInPreedit", "False");
+                instance->inputMethodEngine(ic)->setConfigForInputMethod(
+                    *instance->inputMethodEntry(ic), config);
+                sendGroupedInput(frontend, ic, "y;");
+                FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                             "y;");
+                ic->reset();
+            }
+            if (std::string_view(profile) == "Xiaohe") {
+                sendGroupedInput(frontend, ic, "aa");
+                FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                             "a");
+                ic->reset();
+                config.setValueByPath("PinyinInPreedit", "False");
+                instance->inputMethodEngine(ic)->setConfigForInputMethod(
+                    *instance->inputMethodEntry(ic), config);
+                sendGroupedInput(frontend, ic, "aa");
+                FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                             "aa");
+                ic->reset();
+            }
+        }
     });
 }
 
@@ -1017,6 +1125,7 @@ int main(int argc, char **testArgs) {
         testGroupedShuangpinRawCommit(&instance);
         testGroupedShuangpinPrivateKeyGuard(&instance);
         testGroupedShuangpinSyllableActions(&instance);
+        testGroupedShuangpinPreeditModes(&instance);
         testGroupedShuangpinQuickPhraseBoundary(&instance);
         testGroupedShuangpinQuickPhraseTempMode(&instance);
         testGroupedShuangpinCustomPhraseBoundary(&instance);
@@ -1035,6 +1144,7 @@ int main(int argc, char **testArgs) {
     testGroupedShuangpinRawCommit(&instance);
     testGroupedShuangpinPrivateKeyGuard(&instance);
     testGroupedShuangpinSyllableActions(&instance);
+    testGroupedShuangpinPreeditModes(&instance);
     testGroupedShuangpinQuickPhraseBoundary(&instance);
     testGroupedShuangpinQuickPhraseTempMode(&instance);
     testGroupedShuangpinCustomPhraseBoundary(&instance);
