@@ -290,6 +290,9 @@ void configureGroupedShuangpin(Instance *instance, InputContext *ic,
     config.setValueByPath("Prediction", "False");
     config.setValueByPath("PinyinInPreedit", "False");
     config.setValueByPath("PreeditMode", "Composing pinyin");
+    // Match Android's default: correction collisions in a grouped profile
+    // must not hide an exact syllable's multi-character candidates.
+    config.setValueByPath("Fuzzy/Correction", "QWERTY");
     instance->inputMethodEngine(ic)->setConfigForInputMethod(
         *instance->inputMethodEntry(ic), config);
     ic->reset();
@@ -470,7 +473,9 @@ void testGroupedShuangpinCustomPhraseBoundary(Instance *instance) {
         ic->reset();
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("b"), false);
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("i"), false);
-        FCITX_ASSERT(findCandidate(ic, "你") < 0);
+        // QWERTY correction may legitimately suggest "你" for "bi". A
+        // polluted custom phrase would instead pin it as the first candidate.
+        FCITX_ASSERT(findCandidate(ic, "你") != 0);
         ic->reset();
     });
 }
