@@ -1,5 +1,6 @@
 set(PINYIN_SOURCES
     pinyin.cpp
+    cloudpinyinmatch.cpp
     customphrase.cpp
     symboldictionary.cpp
     workerthread.cpp

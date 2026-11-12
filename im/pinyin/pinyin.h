@@ -464,7 +464,8 @@ private:
 
     void cloudPinyinSelected(InputContext *inputContext,
                              const std::string &selected,
-                             const std::string &word);
+                             const std::string &word,
+                             const std::string &fullPinyin);
 
     bool handleCloudpinyinTrigger(KeyEvent &event);
     bool handle2nd3rdSelection(KeyEvent &event);

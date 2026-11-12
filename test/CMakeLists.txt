@@ -48,6 +48,10 @@ target_link_libraries(testtable Fcitx5::Core Fcitx5::Module::TestFrontend)
 add_dependencies(testtable table copy-addon copy-im)
 add_test(NAME testtable COMMAND testtable)
 
+add_executable(testpinyincloud testpinyincloud.cpp ../im/pinyin/cloudpinyinmatch.cpp)
+target_link_libraries(testpinyincloud Fcitx5::Utils LibIME::Pinyin)
+add_test(NAME testpinyincloud COMMAND testpinyincloud)
+
 add_executable(testcustomphrase testcustomphrase.cpp ../im/pinyin/customphrase.cpp)
 target_compile_definitions(testcustomphrase PRIVATE "-DFCITX_CUSTOM_PHRASE_TEST")
 target_link_libraries(testcustomphrase Fcitx5::Utils LibIME::Core)

@@ -404,6 +404,19 @@ void testGroupedShuangpinPrivateKeyGuard(Instance *instance) {
     });
 }
 
+void confirmGroupedSyllable(InputContext *ic, std::string_view syllable) {
+    // Each confirmation replaces the list and its action storage.
+    auto candidates = ic->inputPanel().candidateList();
+    auto *tabbed = candidates->toTabbed();
+    FCITX_ASSERT(tabbed);
+    const auto actions = tabbed->tabActions();
+    const auto action = std::ranges::find_if(
+        actions, [syllable](const auto &item) { return item.text() == syllable; });
+    FCITX_ASSERT(action != actions.end()) << syllable;
+    const auto id = action->id();
+    tabbed->triggerTabAction(id);
+}
+
 void testGroupedShuangpinSyllableActions(Instance *instance) {
     instance->eventDispatcher().schedule([instance]() {
         auto *frontend = instance->addonManager().addon("testfrontend");
@@ -414,21 +427,19 @@ void testGroupedShuangpinSyllableActions(Instance *instance) {
         configureGroupedShuangpin(instance, ic, "Xiaohe");
         sendGroupedInput(frontend, ic, "nihc");
         FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni hc");
-        auto *tabbed = ic->inputPanel().candidateList()->toTabbed();
-        FCITX_ASSERT(tabbed);
-        const auto actions = tabbed->tabActions();
-        const auto niAction = std::ranges::find_if(
-            actions, [](const auto &action) { return action.text() == "ni"; });
-        FCITX_ASSERT(niAction != actions.end());
-        const auto biAction = std::ranges::find_if(
-            actions, [](const auto &action) { return action.text() == "bi"; });
-        FCITX_ASSERT(biAction != actions.end());
-        tabbed->triggerTabAction(biAction->id());
+        confirmGroupedSyllable(ic, "bi");
         FCITX_ASSERT(
             ic->inputPanel().clientPreedit().toString().starts_with("bi"));
-        tabbed->triggerTabAction(biAction->id());
+        confirmGroupedSyllable(ic, "hua");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "bi hx");
+        FCITX_ASSERT(findCandidate(ic, "你好") < 0);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("BackSpace"), false);
+        FCITX_ASSERT(
+            ic->inputPanel().clientPreedit().toString().starts_with("bi"));
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("BackSpace"), false);
         FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni hc");
-        tabbed->triggerTabAction(niAction->id());
+        confirmGroupedSyllable(ic, "ni");
+        confirmGroupedSyllable(ic, "hao");
         FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni hc");
         frontend->call<ITestFrontend::pushCommitExpectation>("你好");
         findAndSelectCandidate(ic, "你");
@@ -479,17 +490,14 @@ void testGroupedShuangpinPreeditModes(Instance *instance) {
             FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
                          "ni hao");
             FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 6);
-            auto *tabbed = ic->inputPanel().candidateList()->toTabbed();
-            const auto actions = tabbed->tabActions();
-            const auto bi =
-                std::ranges::find_if(actions, [](const auto &action) {
-                    return action.text() == "bi";
-                });
-            FCITX_ASSERT(bi != actions.end());
-            tabbed->triggerTabAction(bi->id());
+            confirmGroupedSyllable(ic, "bi");
             FCITX_ASSERT(
                 ic->inputPanel().clientPreedit().toString().starts_with("bi"));
-            tabbed->triggerTabAction(bi->id());
+            frontend->call<ITestFrontend::keyEvent>(uuid, Key("BackSpace"), false);
+            FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                         "ni hao");
+            confirmGroupedSyllable(ic, "ni");
+            confirmGroupedSyllable(ic, "hao");
             FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
                          "ni hao");
             frontend->call<ITestFrontend::keyEvent>(uuid, Key("Left"), false);
