@@ -20,6 +20,7 @@
 #include <fcitx/inputcontext.h>
 #include <fcitx/text.h>
 #include <libime/core/lattice.h>
+#include <libime/pinyin/pinyinencoder.h>
 #include <memory>
 #include <optional>
 #include <span>
@@ -349,6 +350,9 @@ private:
     bool strokeFilterMode_ = false;
     InputBuffer strokeBuffer_;
     std::vector<std::unordered_set<int>> actionIdToCandidates_;
+    size_t syllableFrom_ = 0;
+    size_t syllableTo_ = 0;
+    std::vector<libime::PinyinSyllable> syllableActions_;
 };
 
 } // namespace fcitx

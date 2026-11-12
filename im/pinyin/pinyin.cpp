@@ -2793,7 +2793,9 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
     } else if (!state->context_.empty()) {
         // key to handle when it is not empty.
         if (event.key().check(FcitxKey_BackSpace)) {
-            if (*config_.useBackSpaceToUnselect &&
+            if (state->groupedInput_ && state->context_.cancelSyllable()) {
+                // Undo the latest syllable confirmation before deleting keys.
+            } else if (*config_.useBackSpaceToUnselect &&
                 state->context_.selectedLength()) {
                 state->context_.cancel();
             } else {
