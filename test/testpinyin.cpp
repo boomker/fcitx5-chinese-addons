@@ -384,20 +384,26 @@ void testGroupedShuangpinPrivateKeyGuard(Instance *instance) {
             "grouped-private-guard");
         auto *ic = instance->inputContextManager().findByUUID(uuid);
         configureGroupedShuangpin(instance, ic, "Xiaohe");
-        const auto sym = static_cast<KeySym>(0x0200e000);
-        FCITX_ASSERT(
-            frontend->call<ITestFrontend::sendKeyEvent>(uuid, Key(sym), false));
-        FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(
-            uuid, Key(sym, KeyStates(KeyState::Virtual) | KeyState::Ctrl),
-            false));
+        constexpr std::array<KeySym, 3> syms = {
+            static_cast<KeySym>(0x0200e000), static_cast<KeySym>(0x0200e200),
+            static_cast<KeySym>(0x0200e300)};
+        for (const auto sym : syms) {
+            FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(
+                uuid, Key(sym), false));
+            FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(
+                uuid, Key(sym, KeyStates(KeyState::Virtual) | KeyState::Ctrl),
+                false));
+        }
         FCITX_ASSERT(!ic->inputPanel().candidateList());
 
         instance->setCurrentInputMethod(ic, "pinyin", true);
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("n"), false);
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("i"), false);
         const auto preedit = ic->inputPanel().preedit().toString();
-        FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(
-            uuid, Key(sym, KeyState::Virtual), false));
+        for (const auto sym : syms) {
+            FCITX_ASSERT(frontend->call<ITestFrontend::sendKeyEvent>(
+                uuid, Key(sym, KeyState::Virtual), false));
+        }
         FCITX_ASSERT(ic->inputPanel().preedit().toString() == preedit);
         frontend->call<ITestFrontend::pushCommitExpectation>("ni");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
@@ -680,6 +686,280 @@ void testGroupedShuangpinContextIsolation(Instance *instance) {
         frontend->call<ITestFrontend::pushCommitExpectation>("ni");
         frontend->call<ITestFrontend::keyEvent>(secondUuid, Key("Return"),
                                                 false);
+    });
+}
+
+void sendGroupedProtocol(AddonInstance *frontend, InputContext *ic,
+                         uint32_t sym) {
+    const Key key(static_cast<KeySym>(sym), KeyState::Virtual);
+    FCITX_ASSERT(Key::keySymToUnicode(key.sym()) == 0);
+    FCITX_ASSERT(
+        frontend->call<ITestFrontend::sendKeyEvent>(ic->uuid(), key, false));
+    frontend->call<ITestFrontend::keyEvent>(ic->uuid(), key, true);
+}
+
+void stageCustomGroups(AddonInstance *frontend, InputContext *ic,
+                       const std::vector<std::string> &groups) {
+    sendGroupedProtocol(frontend, ic, 0x0200e200);
+    for (const auto &group : groups) {
+        for (const char letter : group) {
+            sendGroupedProtocol(
+                frontend, ic, 0x0200e210 + (letter == ';' ? 26 : letter - 'a'));
+        }
+        sendGroupedProtocol(frontend, ic, 0x0200e201);
+    }
+}
+
+void configureCustomGroups(AddonInstance *frontend, InputContext *ic,
+                           const std::vector<std::string> &groups) {
+    stageCustomGroups(frontend, ic, groups);
+    sendGroupedProtocol(frontend, ic, 0x0200e202);
+    sendGroupedProtocol(frontend, ic, 0x0200e101);
+}
+
+void sendCustomGroupedInput(AddonInstance *frontend, InputContext *ic,
+                            const std::vector<std::string> &groups,
+                            std::string_view input) {
+    for (const char letter : input) {
+        if (letter == '\'') {
+            frontend->call<ITestFrontend::keyEvent>(
+                ic->uuid(), Key(FcitxKey_apostrophe, KeyState::Virtual), false);
+            continue;
+        }
+        const auto group =
+            std::ranges::find_if(groups, [letter](const auto &group) {
+                return group.find(letter) != std::string::npos;
+            });
+        FCITX_ASSERT(group != groups.end());
+        const char representative = group->front();
+        sendGroupedProtocol(
+            frontend, ic,
+            0x0200e300 + (representative == ';' ? 26 : representative - 'a'));
+    }
+}
+
+const std::vector<std::string> CustomRegroupedKeys = {
+    "e",  "wq", "rt", "y",  "u", "io", "p", "a",  "sd",
+    "fg", "h",  "jk", "l;", "z", "xc", "v", "bn", "m"};
+
+void testCustomGroupedShuangpinLayouts(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const std::vector<std::vector<std::string>> layouts = {
+            CustomRegroupedKeys,
+            {"q", "w", "e", "rt", "y", "u", "io", "p", "a", "sd", "fg", "h",
+             "jk", "l;", "z", "xc", "v", "bn", "m"},
+            {"q", "we", "rt", "yu", "io", "p", "a", "sd", "fg", "h", "jk", "l;",
+             "z", "xc", "v", "bn", "m"},
+        };
+        for (const auto &[profile, code] :
+             {std::pair{"Xiaohe", "nihc"}, std::pair{"MS", "nihk"},
+              std::pair{"Ziranma", "nihk"}}) {
+            for (const auto &groups : layouts) {
+                const auto uuid =
+                    frontend->call<ITestFrontend::createInputContext>(
+                        "custom-grouped-layout");
+                auto *ic = instance->inputContextManager().findByUUID(uuid);
+                ic->setCapabilityFlags(CapabilityFlag::Preedit);
+                configureGroupedShuangpin(instance, ic, profile);
+                configureCustomGroups(frontend, ic, groups);
+                sendCustomGroupedInput(frontend, ic, groups, code);
+                const auto expected =
+                    std::string("ni ") + std::string(code + 2);
+                FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
+                             expected);
+                frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+                findAndSelectCandidate(ic, "你好");
+
+                sendCustomGroupedInput(frontend, ic, groups, "q");
+                frontend->call<ITestFrontend::pushCommitExpectation>(
+                    groups == CustomRegroupedKeys ? "WQ" : "Q");
+                frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"),
+                                                        false);
+            }
+        }
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "custom-grouped-without-semicolon");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        const std::vector<std::string> oneGroup = {"abcdefghijklmnopqrstuvwxyz"};
+        configureCustomGroups(frontend, ic, oneGroup);
+        sendCustomGroupedInput(frontend, ic, oneGroup, "e");
+        frontend->call<ITestFrontend::pushCommitExpectation>(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+    });
+}
+
+void testCustomGroupedShuangpinAtomicConfig(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "custom-grouped-atomic-config");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        sendGroupedInput(frontend, ic, "nihc");
+        const auto oldPreedit = ic->inputPanel().preedit().toString();
+        stageCustomGroups(frontend, ic, CustomRegroupedKeys);
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == oldPreedit);
+        const auto sentence =
+            ic->inputPanel().candidateList()->candidate(0).text().toString();
+        sendGroupedProtocol(frontend, ic, 0x0200e202);
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == oldPreedit);
+        frontend->call<ITestFrontend::pushCommitExpectation>(sentence);
+        sendGroupedProtocol(frontend, ic, 0x0200e101);
+        FCITX_ASSERT(ic->inputPanel().preedit().empty());
+
+        sendCustomGroupedInput(frontend, ic, CustomRegroupedKeys, "nihc");
+        const auto customPreedit = ic->inputPanel().preedit().toString();
+        auto reordered = CustomRegroupedKeys;
+        std::ranges::reverse(reordered);
+        configureCustomGroups(frontend, ic, reordered);
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == customPreedit);
+
+        auto invalid = CustomRegroupedKeys;
+        invalid[1] += 'q';
+        configureCustomGroups(frontend, ic, invalid);
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == customPreedit);
+        invalid = CustomRegroupedKeys;
+        invalid[0] = "w";
+        configureCustomGroups(frontend, ic, invalid);
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == customPreedit);
+        invalid = CustomRegroupedKeys;
+        invalid.erase(invalid.begin());
+        configureCustomGroups(frontend, ic, invalid);
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == customPreedit);
+        configureCustomGroups(frontend, ic, {});
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == customPreedit);
+
+        sendGroupedProtocol(frontend, ic, 0x0200e200);
+        sendGroupedProtocol(frontend, ic, 0x0200e210);
+        sendGroupedProtocol(frontend, ic,
+                            0x0200e202); // Missing group delimiter.
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == customPreedit);
+        sendGroupedProtocol(frontend, ic, 0x0200e200);
+        sendGroupedProtocol(frontend, ic,
+                            0x0200e2ff); // Invalid config payload.
+        sendGroupedProtocol(frontend, ic, 0x0200e202);
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == customPreedit);
+
+        // Q is a member of WQ, but cannot independently identify that key.
+        sendGroupedProtocol(frontend, ic, 0x0200e300 + ('q' - 'a'));
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == customPreedit);
+        frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+        findAndSelectCandidate(ic, "你好");
+
+        stageCustomGroups(frontend, ic, CustomRegroupedKeys);
+        ic->reset();
+        sendGroupedProtocol(frontend, ic, 0x0200e202);
+        sendCustomGroupedInput(frontend, ic, CustomRegroupedKeys, "q");
+        frontend->call<ITestFrontend::pushCommitExpectation>("WQ");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+
+        // Legacy indexed key presses still select the original partition.
+        sendGroupedInput(frontend, ic, "q");
+        frontend->call<ITestFrontend::pushCommitExpectation>("Q");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+
+        configureCustomGroups(frontend, ic, CustomRegroupedKeys);
+        sendGroupedInput(frontend, ic, "nihc");
+        const auto legacyPreedit = ic->inputPanel().preedit().toString();
+        sendGroupedProtocol(frontend, ic, 0x0200e101);
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == legacyPreedit);
+        frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+        findAndSelectCandidate(ic, "你好");
+    });
+}
+
+void testCustomGroupedShuangpinSyllableActions(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "custom-grouped-syllable-actions");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        ic->setCapabilityFlags(CapabilityFlag::Preedit);
+        configureGroupedShuangpin(instance, ic, "Xiaohe");
+        configureCustomGroups(frontend, ic, CustomRegroupedKeys);
+        sendCustomGroupedInput(frontend, ic, CustomRegroupedKeys, "nihc");
+        confirmGroupedSyllable(ic, "bi");
+        confirmGroupedSyllable(ic, "hua");
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "bi hx");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("BackSpace"), false);
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("BackSpace"), false);
+        FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni hc");
+        confirmGroupedSyllable(ic, "ni");
+        confirmGroupedSyllable(ic, "hao");
+        frontend->call<ITestFrontend::pushCommitExpectation>("你好");
+        findAndSelectCandidate(ic, "你好");
+    });
+}
+
+void testCustomGroupedShuangpinSemicolonAndIsolation(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto firstUuid =
+            frontend->call<ITestFrontend::createInputContext>(
+                "custom-grouped-context-1");
+        const auto secondUuid =
+            frontend->call<ITestFrontend::createInputContext>(
+                "custom-grouped-context-2");
+        auto *first = instance->inputContextManager().findByUUID(firstUuid);
+        auto *second = instance->inputContextManager().findByUUID(secondUuid);
+        configureGroupedShuangpin(instance, first, "MS");
+        configureGroupedShuangpin(instance, second, "MS");
+        std::vector<std::string> singles;
+        for (char letter = 'a'; letter <= 'z'; ++letter) {
+            singles.emplace_back(1, letter);
+        }
+        configureCustomGroups(frontend, first, CustomRegroupedKeys);
+        sendCustomGroupedInput(frontend, first, CustomRegroupedKeys, "q");
+        const auto preedit = first->inputPanel().preedit().toString();
+        configureCustomGroups(frontend, first, singles); // MS requires ';'.
+        FCITX_ASSERT(first->inputPanel().preedit().toString() == preedit);
+        frontend->call<ITestFrontend::pushCommitExpectation>("WQ");
+        frontend->call<ITestFrontend::keyEvent>(firstUuid, Key("Return"), false);
+        singles.emplace_back(";");
+        configureCustomGroups(frontend, first, singles);
+        configureCustomGroups(frontend, second, CustomRegroupedKeys);
+        first->focusIn();
+        second->focusIn();
+        sendCustomGroupedInput(frontend, first, singles, "y;");
+        frontend->call<ITestFrontend::pushCommitExpectation>("应");
+        findAndSelectCandidate(first, "应");
+        sendCustomGroupedInput(frontend, first, singles, "q");
+        frontend->call<ITestFrontend::pushCommitExpectation>("Q");
+        frontend->call<ITestFrontend::keyEvent>(firstUuid, Key("Return"),
+                                                false);
+        sendCustomGroupedInput(frontend, second, CustomRegroupedKeys, "q");
+        frontend->call<ITestFrontend::pushCommitExpectation>("WQ");
+        frontend->call<ITestFrontend::keyEvent>(secondUuid, Key("Return"),
+                                                false);
+
+        const auto thirdUuid = frontend->call<ITestFrontend::createInputContext>(
+            "custom-grouped-profile-change");
+        auto *third = instance->inputContextManager().findByUUID(thirdUuid);
+        configureGroupedShuangpin(instance, third, "Xiaohe");
+        singles.pop_back(); // A valid Xiaohe partition may omit ';'.
+        configureCustomGroups(frontend, third, singles);
+        sendCustomGroupedInput(frontend, third, singles, "e");
+        frontend->call<ITestFrontend::pushCommitExpectation>("E");
+        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
+        RawConfig changedProfile;
+        changedProfile.setValueByPath("ShuangpinProfile", "MS");
+        instance->inputMethodEngine(third)->setConfigForInputMethod(
+            *instance->inputMethodEntry(third), changedProfile);
+        sendGroupedProtocol(frontend, third, 0x0200e300 + ('n' - 'a'));
+        FCITX_ASSERT(third->inputPanel().preedit().empty());
+        FCITX_ASSERT(!third->inputPanel().candidateList());
+        sendGroupedProtocol(frontend, third, 0x0200e300 + ('w' - 'a'));
+        frontend->call<ITestFrontend::pushCommitExpectation>("WE");
+        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
+        changedProfile.setValueByPath("ShuangpinProfile", "Xiaohe");
+        instance->inputMethodEngine(third)->setConfigForInputMethod(
+            *instance->inputMethodEntry(third), changedProfile);
+        sendGroupedProtocol(frontend, third, 0x0200e300 + ('w' - 'a'));
+        frontend->call<ITestFrontend::pushCommitExpectation>("W");
+        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
     });
 }
 
@@ -1140,6 +1420,10 @@ int main(int argc, char **testArgs) {
         testGroupedShuangpinModeControl(&instance);
         testGroupedShuangpinHardwareSwitch(&instance);
         testGroupedShuangpinContextIsolation(&instance);
+        testCustomGroupedShuangpinLayouts(&instance);
+        testCustomGroupedShuangpinAtomicConfig(&instance);
+        testCustomGroupedShuangpinSyllableActions(&instance);
+        testCustomGroupedShuangpinSemicolonAndIsolation(&instance);
         instance.eventDispatcher().schedule([&instance]() { instance.exit(); });
         instance.exec();
         return 0;
@@ -1159,6 +1443,10 @@ int main(int argc, char **testArgs) {
     testGroupedShuangpinModeControl(&instance);
     testGroupedShuangpinHardwareSwitch(&instance);
     testGroupedShuangpinContextIsolation(&instance);
+    testCustomGroupedShuangpinLayouts(&instance);
+    testCustomGroupedShuangpinAtomicConfig(&instance);
+    testCustomGroupedShuangpinSyllableActions(&instance);
+    testCustomGroupedShuangpinSemicolonAndIsolation(&instance);
     testForget(&instance);
     testActionInStrokeFilter(&instance);
     testPinyinTabFilter(&instance);

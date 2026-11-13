@@ -381,7 +381,14 @@ public:
 
     libime::PinyinContext context_;
     // The ordinary IME profile stays shared; compact input overrides only
-    // this input context. Retain the projection until its source changes.
+    // this input context. Retain the projection until its source or groups
+    // change.
+    std::vector<std::string> groupedKeys_;
+    // Complete layout notifications do not disturb temporary addon modes.
+    // Apply this partition when ordinary mode/group events reach the engine.
+    std::vector<std::string> configuredGroupedKeys_;
+    // The last entry is the open group; a trailing empty entry marks its end.
+    std::optional<std::vector<std::string>> pendingGroupedKeys_;
     std::shared_ptr<const libime::ShuangpinProfile> groupedSourceProfile_;
     std::shared_ptr<const libime::ShuangpinProfile> groupedProfile_;
     // Exact source spellings, keyed by encoded syllable + grouped input.
@@ -526,7 +533,8 @@ private:
     std::string preeditCommitString(InputContext *inputContext) const;
     std::pair<std::string, size_t>
     preeditWithCursor(InputContext *inputContext) const;
-    void setGroupedInput(InputContext *inputContext, bool grouped);
+    void setGroupedInput(InputContext *inputContext, bool grouped,
+                         const std::vector<std::string> *groups = nullptr);
 
 #ifdef FCITX_HAS_LUA
     std::vector<std::string>

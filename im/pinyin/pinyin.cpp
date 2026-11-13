@@ -116,33 +116,71 @@ constexpr std::string_view ShuangpinUniqueName = "shuangpin";
 // modes cannot turn these keys into Unicode characters if they intercept them.
 constexpr uint32_t GroupedKeyBase = 0x0200e000;
 constexpr uint32_t GroupedModeBase = 0x0200e100;
+constexpr uint32_t GroupedConfigBegin = 0x0200e200;
+constexpr uint32_t GroupedConfigEndGroup = 0x0200e201;
+constexpr uint32_t GroupedConfigCommit = 0x0200e202;
+constexpr uint32_t GroupedConfigCharacterBase = 0x0200e210;
+constexpr uint32_t GroupedRepresentativeBase = 0x0200e300;
+constexpr size_t GroupedAlphabetSize = 27;
 constexpr std::array<std::string_view, 18> GroupedKeys = {
     "q",  "we", "rt", "y",  "u", "io", "p", "a",  "sd",
     "fg", "h",  "jk", "l;", "z", "xc", "v", "bn", "m"};
 
-const std::unordered_map<char, char> &groupedKeyMapping() {
-    static const auto mapping = [] {
-        std::unordered_map<char, char> result;
-        for (auto group : GroupedKeys) {
-            for (auto key : group) {
-                result.emplace(key, group.front());
-            }
-        }
+const std::vector<std::string> &defaultGroupedKeys() {
+    static const auto groups = [] {
+        std::vector<std::string> result(GroupedKeys.begin(), GroupedKeys.end());
+        std::ranges::sort(result);
         return result;
     }();
-    return mapping;
+    return groups;
 }
 
-std::string groupedInputText(std::string_view input, bool semicolon,
-                             bool uppercase = true) {
+std::unordered_map<char, char>
+groupedKeyMapping(const std::vector<std::string> &groups) {
+    std::unordered_map<char, char> result;
+    for (const auto &group : groups) {
+        for (auto key : group) {
+            result.emplace(key, group.front());
+        }
+    }
+    return result;
+}
+
+bool validGroupedKeys(const std::vector<std::string> &groups, bool semicolon) {
+    if (groups.empty() || groups.size() > GroupedAlphabetSize) {
+        return false;
+    }
+    std::unordered_set<char> letters;
+    for (const auto &group : groups) {
+        if (group.empty()) {
+            return false;
+        }
+        for (const auto letter : group) {
+            if ((letter != ';' && (letter < 'a' || letter > 'z')) ||
+                !letters.insert(letter).second) {
+                return false;
+            }
+        }
+    }
+    for (char letter = 'a'; letter <= 'z'; ++letter) {
+        if (!letters.contains(letter)) {
+            return false;
+        }
+    }
+    return !semicolon || letters.contains(';');
+}
+
+std::string groupedInputText(std::string_view input,
+                             const std::vector<std::string> &groups,
+                             bool semicolon, bool uppercase = true) {
     std::string result;
     for (auto chr : input) {
         if (!result.empty()) {
             result += ' ';
         }
         auto iter = std::ranges::find_if(
-            GroupedKeys, [chr](auto group) { return group.front() == chr; });
-        if (iter == GroupedKeys.end()) {
+            groups, [chr](const auto &group) { return group.front() == chr; });
+        if (iter == groups.end()) {
             result += chr;
         } else {
             for (auto key : *iter) {
@@ -365,7 +403,9 @@ std::optional<int> selectCharFromCandidateIndex(const Key &key,
 
 } // namespace
 
-PinyinState::PinyinState(PinyinEngine *engine) : context_(engine->ime()) {
+PinyinState::PinyinState(PinyinEngine *engine)
+    : context_(engine->ime()), groupedKeys_(defaultGroupedKeys()),
+      configuredGroupedKeys_(defaultGroupedKeys()) {
     context_.setMaxSentenceLength(35);
 }
 
@@ -507,7 +547,7 @@ PinyinEngine::preeditCommitString(InputContext *inputContext) const {
     return context.selectedSentence() +
            (state->groupedInput_
                 ? groupedInputText(
-                      remaining,
+                      remaining, state->groupedKeys_,
                       state->groupedSourceProfile_->validInput().contains(';'))
                 : std::string(remaining));
 }
@@ -628,8 +668,8 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
             }
         }
         if (shown.empty()) {
-            shown = groupedInputText(input.substr(from, to - from), semicolon,
-                                     false);
+            shown = groupedInputText(input.substr(from, to - from),
+                                     state->groupedKeys_, semicolon, false);
         }
         const bool isSyllable = input[from] != '\'';
         if (previousSyllable && isSyllable) {
@@ -651,10 +691,32 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
     return {std::move(text), cursorPositions[context.cursor()]};
 }
 
-void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped) {
+void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped,
+                                   const std::vector<std::string> *groups) {
     auto *state = inputContext->propertyFor(&factory_);
     const auto source = ime_->shuangpinProfile();
+    if (grouped && !groups) {
+        groups = &state->configuredGroupedKeys_;
+    }
     if (state->groupedInput_ == grouped &&
+        (!grouped || state->groupedSourceProfile_ == source) &&
+        (!groups || state->groupedKeys_ == *groups)) {
+        return;
+    }
+    std::vector<std::string> normalizedGroups;
+    if (groups) {
+        normalizedGroups = *groups;
+        std::ranges::sort(normalizedGroups);
+        groups = &normalizedGroups;
+    }
+    // A profile can change before Android sends its next layout transaction.
+    if (grouped && !validGroupedKeys(groups ? *groups : state->groupedKeys_,
+                                     source->validInput().contains(';'))) {
+        normalizedGroups = defaultGroupedKeys();
+        groups = &normalizedGroups;
+    }
+    const bool groupsChanged = groups && state->groupedKeys_ != *groups;
+    if (!groupsChanged && state->groupedInput_ == grouped &&
         (!grouped || state->groupedSourceProfile_ == source)) {
         return;
     }
@@ -669,16 +731,20 @@ void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped) {
         }
         doReset(inputContext);
     }
-    if (grouped && state->groupedSourceProfile_ != source) {
-        state->groupedProfile_ = std::make_shared<libime::ShuangpinProfile>(
-            *source, groupedKeyMapping());
+    if (groupsChanged) {
+        state->groupedKeys_ = *groups;
+    }
+    if (grouped && (groupsChanged || state->groupedSourceProfile_ != source)) {
+        const auto mapping = groupedKeyMapping(state->groupedKeys_);
+        state->groupedProfile_ =
+            std::make_shared<libime::ShuangpinProfile>(*source, mapping);
         state->groupedSourceProfile_ = source;
         state->groupedPreeditCodes_.clear();
         for (const auto &[code, syllables] : source->table()) {
             std::string mapped;
             for (const auto key : code) {
-                const auto group = groupedKeyMapping().find(key);
-                if (group == groupedKeyMapping().end()) {
+                const auto group = mapping.find(key);
+                if (group == mapping.end()) {
                     break;
                 }
                 mapped += group->second;
@@ -1746,6 +1812,7 @@ void PinyinEngine::activate(const fcitx::InputMethodEntry &entry,
     state->context_.setUseShuangpin(isShuangpinEntry(entry));
     state->context_.setShuangpinProfile(nullptr);
     state->groupedInput_ = false;
+    state->pendingGroupedKeys_.reset();
     applyShuangpinProfile(entry);
     // TODO: use surrouding to re-build context.
     state->context_.clearContextWords();
@@ -2501,15 +2568,55 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
     auto *state = inputContext->propertyFor(&factory_);
 
     const auto sym = event.key().sym();
-    const bool groupedKey = sym >= GroupedKeyBase &&
-                            sym < GroupedKeyBase + GroupedKeys.size();
+    const bool legacyGroupedKey =
+        sym >= GroupedKeyBase && sym < GroupedKeyBase + GroupedKeys.size();
+    const bool representativeGroupedKey =
+        sym >= GroupedRepresentativeBase &&
+        sym < GroupedRepresentativeBase + GroupedAlphabetSize;
+    const bool groupedKey = legacyGroupedKey || representativeGroupedKey;
     const bool groupedMode =
         sym == GroupedModeBase || sym == GroupedModeBase + 1;
-    if ((groupedKey || groupedMode) &&
+    const bool groupedConfig =
+        sym >= GroupedConfigBegin && sym < GroupedRepresentativeBase;
+    if ((groupedKey || groupedMode || groupedConfig) &&
         (event.isRelease() || !event.isVirtual() || !isShuangpinEntry(entry) ||
          event.key().hasModifier())) {
         event.filterAndAccept();
         return;
+    }
+    if (groupedConfig) {
+        event.filterAndAccept();
+        if (sym == GroupedConfigBegin) {
+            state->pendingGroupedKeys_ = std::vector<std::string>{""};
+        } else if (auto &pending = state->pendingGroupedKeys_; pending) {
+            if (sym >= GroupedConfigCharacterBase &&
+                sym < GroupedConfigCharacterBase + GroupedAlphabetSize &&
+                pending->size() <= GroupedAlphabetSize &&
+                pending->back().size() < GroupedAlphabetSize) {
+                const auto index = sym - GroupedConfigCharacterBase;
+                pending->back() += index == 26 ? ';' : char('a' + index);
+            } else if (sym == GroupedConfigEndGroup &&
+                       !pending->back().empty() &&
+                       pending->size() <= GroupedAlphabetSize) {
+                pending->emplace_back();
+            } else if (sym == GroupedConfigCommit && pending->back().empty()) {
+                auto groups = std::move(*pending);
+                pending.reset();
+                groups.pop_back();
+                if (validGroupedKeys(
+                        groups,
+                        ime_->shuangpinProfile()->validInput().contains(';'))) {
+                    std::ranges::sort(groups);
+                    state->configuredGroupedKeys_ = std::move(groups);
+                }
+            } else {
+                pending.reset();
+            }
+        }
+        return;
+    }
+    if (!event.isRelease()) {
+        state->pendingGroupedKeys_.reset();
     }
     if (groupedMode) {
         handlePuncCandidate(event);
@@ -2615,10 +2722,30 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
     }
 
     if (groupedKey) {
-        setGroupedInput(inputContext, true);
-        const auto chr = GroupedKeys[sym - GroupedKeyBase].front();
-        const auto profile = state->context_.shuangpinProfile();
         event.filterAndAccept();
+        char chr;
+        if (legacyGroupedKey) {
+            state->configuredGroupedKeys_ = defaultGroupedKeys();
+            setGroupedInput(inputContext, true, &defaultGroupedKeys());
+            chr = GroupedKeys[sym - GroupedKeyBase].front();
+        } else {
+            const auto index = sym - GroupedRepresentativeBase;
+            chr = index == 26 ? ';' : char('a' + index);
+            if (std::ranges::none_of(state->configuredGroupedKeys_,
+                                     [chr](const auto &group) {
+                                         return group.front() == chr;
+                                     })) {
+                return;
+            }
+            setGroupedInput(inputContext, true);
+            if (std::ranges::none_of(state->groupedKeys_,
+                                     [chr](const auto &group) {
+                                         return group.front() == chr;
+                                     })) {
+                return;
+            }
+        }
+        const auto profile = state->context_.shuangpinProfile();
         if ((state->context_.empty() &&
              profile->validInitial().contains(chr)) ||
             (!state->context_.empty() && profile->validInput().contains(chr))) {
@@ -2886,6 +3013,7 @@ void PinyinEngine::reset(const InputMethodEntry & /*entry*/,
 
 void PinyinEngine::doReset(InputContext *inputContext) const {
     auto *state = inputContext->propertyFor(&factory_);
+    state->pendingGroupedKeys_.reset();
     resetForgetCandidate(inputContext);
     state->mode_ = PinyinMode::Normal;
     state->context_.clear();
