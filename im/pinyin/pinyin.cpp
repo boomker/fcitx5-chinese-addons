@@ -764,6 +764,9 @@ void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped,
     }
     state->context_.setShuangpinProfile(grouped ? state->groupedProfile_
                                                 : nullptr);
+    if (grouped) {
+        state->context_.setCorrectionEnabled(false);
+    }
     state->groupedInput_ = grouped;
 }
 
@@ -1493,6 +1496,7 @@ void PinyinEngine::applyImeRuntime() {
     ime_->setNBest(*config_.nbest);
     ime_->setWordCandidateLimit(*config_.wordCandidateLimit);
     ime_->setPartialLongWordLimit(*config_.longWordLimit);
+    ime_->setPartialSpLength(*config_.partialSpLength);
     ime_->setPreeditMode(*config_.showActualPinyinInPreedit
                              ? libime::PinyinPreeditMode::Pinyin
                              : libime::PinyinPreeditMode::RawText);
@@ -1683,6 +1687,7 @@ PinyinEngine::ensurePerImConfig(const std::string &uniqueName) const {
         // The plain pinyin entry has no shuangpin-specific options.
         config.showShuangpinMode.annotation().setHidden(true);
         config.fuzzyConfig->partialSp.annotation().setHidden(true);
+        config.partialSpLength.annotation().setHidden(true);
     }
     // cannot use the lazy FCITX_ADDON_DEPENDENCY_LOADER accessor here because
     // this method is const.
@@ -1811,7 +1816,9 @@ void PinyinEngine::activate(const fcitx::InputMethodEntry &entry,
     auto *state = inputContext->propertyFor(&factory_);
     state->context_.setUseShuangpin(isShuangpinEntry(entry));
     state->context_.setShuangpinProfile(nullptr);
+    state->context_.setCorrectionEnabled(true);
     state->groupedInput_ = false;
+    state->compactLayout_ = false;
     state->pendingGroupedKeys_.reset();
     applyShuangpinProfile(entry);
     // TODO: use surrouding to re-build context.
@@ -2621,7 +2628,9 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
     if (groupedMode) {
         handlePuncCandidate(event);
         resetPredict(inputContext);
-        setGroupedInput(inputContext, sym == GroupedModeBase + 1);
+        state->compactLayout_ = sym == GroupedModeBase + 1;
+        setGroupedInput(inputContext, state->compactLayout_);
+        state->context_.setCorrectionEnabled(!state->compactLayout_);
         event.filterAndAccept();
         updateUI(inputContext);
         return;
@@ -2723,6 +2732,7 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
 
     if (groupedKey) {
         event.filterAndAccept();
+        state->compactLayout_ = true;
         char chr;
         if (legacyGroupedKey) {
             state->configuredGroupedKeys_ = defaultGroupedKeys();
@@ -2745,6 +2755,7 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
                 return;
             }
         }
+        state->context_.setCorrectionEnabled(false);
         const auto profile = state->context_.shuangpinProfile();
         if ((state->context_.empty() &&
              profile->validInitial().contains(chr)) ||
@@ -2757,6 +2768,11 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
     if (state->groupedInput_ && (event.key().isLAZ() || event.key().isUAZ() ||
                                  event.key().check(FcitxKey_semicolon))) {
         setGroupedInput(inputContext, false);
+    }
+    if (event.key().isLAZ() || event.key().isUAZ() ||
+        event.key().check(FcitxKey_semicolon)) {
+        state->context_.setCorrectionEnabled(!event.isVirtual() ||
+                                             !state->compactLayout_);
     }
 
     auto checkSp = [&keyChr](const KeyEvent &event, PinyinState *state) {

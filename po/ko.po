@@ -1446,3 +1446,7 @@ msgid ""
 "Add support for Pinyin, Table and many other Chinese related functionality "
 "to Fcitx"
 msgstr "Fcitx에 Pinyin, 표 및 기타 많은 한어 관련 기능에 대한 지원 추가"
+
+#: im/pinyin/pinyin.h
+msgid "Minimum length for abbreviated pinyin"
+msgstr "병음 약식 입력 시작 길이"

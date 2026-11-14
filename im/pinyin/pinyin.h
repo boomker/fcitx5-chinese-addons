@@ -334,6 +334,10 @@ FCITX_CONFIGURATION(
         this, "LongWordLengthLimit",
         _("Prompt long word length when input length over (0 for disable)"), 4,
         IntConstrain(0, 10)};
+    Option<int, IntConstrain, DefaultMarshaller<int>, OptionalHideInDescription>
+        partialSpLength{this, "PartialSpLength",
+                        _("Minimum length for abbreviated pinyin"), 4,
+                        IntConstrain(2, 4)};
     ExternalOption dictmanager{this, "DictManager", _("Manage Dictionaries"),
                                "fcitx://config/addon/pinyin/dictmanager"};
     ExternalOption customphrase{this, "CustomPhrase", _("Manage Custom Phrase"),
@@ -394,6 +398,9 @@ public:
     // Exact source spellings, keyed by encoded syllable + grouped input.
     std::unordered_map<std::string, std::string> groupedPreeditCodes_;
     bool groupedInput_ = false;
+    // The selected onscreen layout remains compact while a physical keyboard
+    // temporarily switches the input routing back to ordinary shuangpin.
+    bool compactLayout_ = false;
     bool lastIsPunc_ = false;
 
     PinyinMode mode_ = PinyinMode::Normal;

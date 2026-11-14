@@ -1422,3 +1422,7 @@ msgid ""
 "Add support for Pinyin, Table and many other Chinese related functionality "
 "to Fcitx"
 msgstr ""
+
+#: im/pinyin/pinyin.h
+msgid "Minimum length for abbreviated pinyin"
+msgstr "Mindestlänge für Pinyin-Abkürzungen"

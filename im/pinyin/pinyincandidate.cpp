@@ -87,10 +87,10 @@ bestMatchPinyin(std::string_view pinyin, std::string_view candidatePinyin,
     syls = context.useShuangpin()
                ? libime::PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
                      pinyin, *context.shuangpinProfile(),
-                     context.ime()->fuzzyFlags())
+                     context.fuzzyFlags())
                : libime::PinyinEncoder::stringToSyllablesWithFuzzyFlags(
                      pinyin, context.ime()->correctionProfile().get(),
-                     context.ime()->fuzzyFlags());
+                     context.fuzzyFlags());
     std::optional<libime::PinyinSyllable> syl;
 
     if (!syls.empty() && !syls.front().second.empty()) {
@@ -535,7 +535,7 @@ void PinyinTabbedCandidateList::buildTabActions() {
         auto matches =
             libime::PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
                 fullInput.substr(syllableFrom_, syllableTo_ - syllableFrom_),
-                *context.shuangpinProfile(), context.ime()->fuzzyFlags());
+                *context.shuangpinProfile(), context.fuzzyFlags());
         if (syllableTo_ - syllableFrom_ == 2 &&
             std::ranges::none_of(matches, [](const auto &match) {
                 return match.first != libime::PinyinInitial::Invalid &&
@@ -545,7 +545,7 @@ void PinyinTabbedCandidateList::buildTabActions() {
             syllableTo_ = syllableFrom_ + 1;
             matches = libime::PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
                 fullInput.substr(syllableFrom_, 1), *context.shuangpinProfile(),
-                context.ime()->fuzzyFlags());
+                context.fuzzyFlags());
         }
         std::unordered_set<std::string> labels;
         for (const auto &[initial, finals] : matches) {

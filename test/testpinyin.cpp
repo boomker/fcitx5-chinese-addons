@@ -45,6 +45,7 @@ namespace {
 
 std::unique_ptr<EventSourceTime> endTestEvent;
 void testPunctuationPart2(Instance *instance);
+void confirmGroupedSyllable(InputContext *ic, std::string_view syllable);
 
 int findCandidate(InputContext *ic, std::string_view word) {
     auto candList = ic->inputPanel().candidateList();
@@ -290,8 +291,8 @@ void configureGroupedShuangpin(Instance *instance, InputContext *ic,
     config.setValueByPath("Prediction", "False");
     config.setValueByPath("PinyinInPreedit", "False");
     config.setValueByPath("PreeditMode", "Composing pinyin");
-    // Match Android's default: correction collisions in a grouped profile
-    // must not hide an exact syllable's multi-character candidates.
+    // Keep Android's saved QWERTY preference enabled. Compact layouts must
+    // suppress it at runtime without changing the 26-key preference.
     config.setValueByPath("Fuzzy/Correction", "QWERTY");
     instance->inputMethodEngine(ic)->setConfigForInputMethod(
         *instance->inputMethodEntry(ic), config);
@@ -369,10 +370,24 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
 
         ic->setCapabilityFlags(CapabilityFlags{});
         sendGroupedInput(frontend, ic, "gp");
-        // No exact source spelling exists for this candidate's grouped prefix.
-        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "fg p");
-        FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 4);
+        // With compact correction disabled, both decoded initials have exact
+        // source spellings. Raw commit still expands the complete key groups.
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "g p")
+            << ic->inputPanel().preedit().toString();
+        FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 3)
+            << ic->inputPanel().preedit().cursor();
         frontend->call<ITestFrontend::pushCommitExpectation>("FG P");
+        frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+
+        // The automatic ch/c partner has no exact c source spelling on the IO
+        // key. Confirm it so fallback rendering is independent of word ranking.
+        sendGroupedInput(frontend, ic, "ip");
+        confirmGroupedSyllable(ic, "c");
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "io p")
+            << ic->inputPanel().preedit().toString();
+        FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 4)
+            << ic->inputPanel().preedit().cursor();
+        frontend->call<ITestFrontend::pushCommitExpectation>("IO P");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
     });
 }
@@ -696,6 +711,95 @@ void sendGroupedProtocol(AddonInstance *frontend, InputContext *ic,
     FCITX_ASSERT(
         frontend->call<ITestFrontend::sendKeyEvent>(ic->uuid(), key, false));
     frontend->call<ITestFrontend::keyEvent>(ic->uuid(), key, true);
+}
+
+void testGroupedShuangpinCorrectionScope(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto firstUuid =
+            frontend->call<ITestFrontend::createInputContext>(
+                "grouped-correction-scope");
+        auto *first = instance->inputContextManager().findByUUID(firstUuid);
+        configureGroupedShuangpin(instance, first, "Xiaohe");
+
+        const auto typeLetters = [frontend](InputContext *ic,
+                                            std::string_view input,
+                                            bool virtualKeys) {
+            for (const char letter : input) {
+                const Key key(static_cast<KeySym>(letter),
+                              virtualKeys ? KeyStates{KeyState::Virtual}
+                                          : KeyStates{});
+                frontend->call<ITestFrontend::keyEvent>(ic->uuid(), key, false);
+                frontend->call<ITestFrontend::keyEvent>(ic->uuid(), key, true);
+            }
+        };
+        const auto expectMi = [](InputContext *ic, bool correction) {
+            findCandidateOrDie(ic, "米");
+            FCITX_ASSERT((findCandidate(ic, "你") >= 0) == correction);
+        };
+
+        // m and n are QWERTY neighbours but belong to different compact
+        // groups. Thus "你" for mi can only come from neighbour correction.
+        typeLetters(first, "mi", true);
+        expectMi(first, true);
+        first->reset();
+
+        sendGroupedProtocol(frontend, first, 0x0200e101);
+        sendGroupedInput(frontend, first, "mi");
+        expectMi(first, false);
+        first->reset();
+
+        // A raw virtual key may leave the grouped parser without changing
+        // the selected 18-key layout. Correction must remain suppressed.
+        typeLetters(first, "mi", true);
+        expectMi(first, false);
+        first->reset();
+
+        // Reapplying the saved preference must not restore compact correction
+        // through a new shared profile or cached syllable matches.
+        RawConfig config;
+        config.setValueByPath("Fuzzy/Correction", "QWERTY");
+        instance->inputMethodEngine(first)->setConfigForInputMethod(
+            *instance->inputMethodEntry(first), config);
+        sendGroupedInput(frontend, first, "mi");
+        expectMi(first, false);
+        first->reset();
+
+        // Exact compact aliases continue to work even though correction is off.
+        sendGroupedInput(frontend, first, "nihc");
+        findCandidateOrDie(first, "你好");
+        first->reset();
+
+        sendGroupedProtocol(frontend, first, 0x0200e100);
+        typeLetters(first, "mi", true);
+        expectMi(first, true);
+        first->reset();
+
+        // Physical 26-key input temporarily takes over, then compact input
+        // suppresses correction again without altering the saved preference.
+        sendGroupedProtocol(frontend, first, 0x0200e101);
+        typeLetters(first, "mi", false);
+        expectMi(first, true);
+        first->reset();
+        sendGroupedInput(frontend, first, "mi");
+        expectMi(first, false);
+        first->reset();
+
+        const auto secondUuid =
+            frontend->call<ITestFrontend::createInputContext>(
+                "ordinary-correction-scope");
+        auto *second = instance->inputContextManager().findByUUID(secondUuid);
+        instance->setCurrentInputMethod(second, "shuangpin", true);
+        first->focusIn();
+        second->focusIn();
+        sendGroupedInput(frontend, first, "mi");
+        expectMi(first, false);
+        typeLetters(second, "mi", true);
+        expectMi(second, true);
+        expectMi(first, false);
+        first->reset();
+        second->reset();
+    });
 }
 
 void stageCustomGroups(AddonInstance *frontend, InputContext *ic,
@@ -1420,6 +1524,7 @@ int main(int argc, char **testArgs) {
         testGroupedShuangpinModeControl(&instance);
         testGroupedShuangpinHardwareSwitch(&instance);
         testGroupedShuangpinContextIsolation(&instance);
+        testGroupedShuangpinCorrectionScope(&instance);
         testCustomGroupedShuangpinLayouts(&instance);
         testCustomGroupedShuangpinAtomicConfig(&instance);
         testCustomGroupedShuangpinSyllableActions(&instance);
@@ -1443,6 +1548,7 @@ int main(int argc, char **testArgs) {
     testGroupedShuangpinModeControl(&instance);
     testGroupedShuangpinHardwareSwitch(&instance);
     testGroupedShuangpinContextIsolation(&instance);
+    testGroupedShuangpinCorrectionScope(&instance);
     testCustomGroupedShuangpinLayouts(&instance);
     testCustomGroupedShuangpinAtomicConfig(&instance);
     testCustomGroupedShuangpinSyllableActions(&instance);

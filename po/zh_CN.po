@@ -1519,3 +1519,7 @@ msgid ""
 "Add support for Pinyin, Table and many other Chinese related functionality "
 "to Fcitx"
 msgstr "增加对拼音，码表，以及其他许多中文相关的功能到 Fcitx"
+
+#: im/pinyin/pinyin.h
+msgid "Minimum length for abbreviated pinyin"
+msgstr "简拼起始长度"

@@ -1542,3 +1542,7 @@ msgid ""
 msgstr ""
 "Добавить в Fcitx поддержку Пиньинь, таблиц и многих других функций, "
 "связанных с китайским языком."
+
+#: im/pinyin/pinyin.h
+msgid "Minimum length for abbreviated pinyin"
+msgstr "Минимальная длина сокращённого пиньиня"
