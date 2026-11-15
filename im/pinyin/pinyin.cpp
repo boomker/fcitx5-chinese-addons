@@ -552,16 +552,32 @@ PinyinEngine::preeditCommitString(InputContext *inputContext) const {
                 : std::string(remaining));
 }
 
+std::string PinyinEngine::preeditCommitString(InputContext *inputContext,
+                                              bool withSeparator) const {
+    auto text = preeditWithCursor(inputContext, true).first;
+    if (!withSeparator) {
+        const auto *state = inputContext->propertyFor(&factory_);
+        const auto prefixLength = state->context_.selectedSentence().size();
+        text.erase(
+            std::remove_if(text.begin() + prefixLength, text.end(),
+                           [](char chr) { return chr == ' ' || chr == '\''; }),
+            text.end());
+    }
+    return text;
+}
+
 std::pair<std::string, size_t>
-PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
+PinyinEngine::preeditWithCursor(InputContext *inputContext,
+                                bool forCommit) const {
     const auto *state = inputContext->propertyFor(&factory_);
     const auto &context = state->context_;
-    if (!state->groupedInput_) {
+    if (!state->groupedInput_ && !forCommit) {
         return context.preeditWithCursor();
     }
     const auto input = std::string_view(context.userInput());
     const auto selected = context.selectedLength();
     const bool semicolon =
+        state->groupedInput_ &&
         state->groupedSourceProfile_->validInput().contains(';');
 
     struct Syllable {
@@ -570,8 +586,8 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
         libime::PinyinFinal final;
     };
     std::map<size_t, Syllable> syllables;
-    const auto collect = [&input,
-                          selected](const libime::SentenceResult &result) {
+    const auto collect = [&input](const libime::SentenceResult &result,
+                                  size_t offset) {
         std::map<size_t, Syllable> spans;
         for (const auto *node : result.sentence()) {
             const auto encoded = std::string_view(
@@ -579,8 +595,8 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
             size_t syllableIndex = 0;
             const auto &path = node->path();
             for (size_t i = 1; i < path.size(); ++i) {
-                auto from = selected + path[i - 1]->index();
-                auto to = selected + path[i]->index();
+                auto from = offset + path[i - 1]->index();
+                auto to = offset + path[i]->index();
                 if (to > input.size()) {
                     continue;
                 }
@@ -608,17 +624,26 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
         return spans;
     };
     if (!context.candidates().empty()) {
-        syllables = collect(context.candidates()[0]);
+        syllables = collect(context.candidates()[0], selected);
     }
-    // Filtering changes the visible candidates rather than the decoder's best
-    // sentence. Use the visible prefix, retaining the decoded trailing input.
+    // A highlighted or filtered candidate may differ from the decoder's best
+    // sentence. Use its prefix, retaining the decoded trailing input.
     if (auto *tabbed = currentPinyinTabbed(inputContext);
-        tabbed && tabbed->hasFilter()) {
+        forCommit || (tabbed && tabbed->hasFilter())) {
         const auto list = inputContext->inputPanel().candidateList();
         if (list && !list->empty()) {
+            const auto index =
+                forCommit && list->cursorIndex() >= 0 ? list->cursorIndex() : 0;
+            const CandidateWord *word = &list->candidate(index);
+            if (forCommit && list->toBulk() && list->toBulkCursor()) {
+                const auto globalIndex =
+                    list->toBulkCursor()->globalCursorIndex();
+                if (globalIndex >= 0) {
+                    word = &list->toBulk()->candidateFromAll(globalIndex);
+                }
+            }
             const auto *candidate =
-                dynamic_cast<const PinyinCandidateIndexInterface *>(
-                    &list->candidate(0));
+                dynamic_cast<const PinyinCandidateIndexInterface *>(word);
             const auto &candidates = context.candidatesToCursor();
             if (candidate && candidate->candidateIndex() >= 0 &&
                 static_cast<size_t>(candidate->candidateIndex()) <
@@ -627,9 +652,26 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
                 if (!visible.sentence().empty()) {
                     const auto end =
                         selected + visible.sentence().back()->to()->index();
-                    syllables.erase(syllables.begin(),
-                                    syllables.lower_bound(end));
-                    const auto prefix = collect(visible);
+                    const auto after = syllables.upper_bound(end);
+                    if (forCommit && after != syllables.begin() &&
+                        std::prev(after)->first < end &&
+                        std::prev(after)->second.end > end) {
+                        // A partial candidate can split the best syllable:
+                        // xian -> xi + an. Decode the newly exposed suffix.
+                        libime::PinyinContext suffix(context.ime());
+                        suffix.setUseShuangpin(context.useShuangpin());
+                        suffix.setShuangpinProfile(context.shuangpinProfile());
+                        suffix.setCorrectionEnabled(!state->groupedInput_);
+                        suffix.type(input.substr(end));
+                        syllables.clear();
+                        if (!suffix.candidates().empty()) {
+                            syllables = collect(suffix.candidates()[0], end);
+                        }
+                    } else {
+                        syllables.erase(syllables.begin(),
+                                        syllables.lower_bound(end));
+                    }
+                    const auto prefix = collect(visible, selected);
                     syllables.insert(prefix.begin(), prefix.end());
                 }
             }
@@ -659,17 +701,24 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext) const {
                     libime::PinyinEncoder::initialToString(syllable.initial)
                         .size();
             } else {
-                const auto key =
-                    groupedPreeditCodeKey(code, syllable.initial, final);
-                if (const auto spelling = state->groupedPreeditCodes_.find(key);
-                    spelling != state->groupedPreeditCodes_.end()) {
-                    shown = spelling->second;
+                if (state->groupedInput_) {
+                    const auto key =
+                        groupedPreeditCodeKey(code, syllable.initial, final);
+                    if (const auto spelling =
+                            state->groupedPreeditCodes_.find(key);
+                        spelling != state->groupedPreeditCodes_.end()) {
+                        shown = spelling->second;
+                    }
+                } else {
+                    shown = code;
                 }
             }
         }
         if (shown.empty()) {
-            shown = groupedInputText(input.substr(from, to - from),
-                                     state->groupedKeys_, semicolon, false);
+            const auto code = input.substr(from, to - from);
+            shown = forCommit ? std::string(code)
+                              : groupedInputText(code, state->groupedKeys_,
+                                                 semicolon, false);
         }
         const bool isSyllable = input[from] != '\'';
         if (previousSyllable && isSyllable) {
@@ -2923,7 +2972,9 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
             state->context_.clear();
             event.filterAndAccept();
         } else if (event.key().checkKeyList(*config_.commitRawInput)) {
-            inputContext->commitString(preeditCommitString(inputContext));
+            // Key normalization can remove Shift from keypad Enter.
+            inputContext->commitString(preeditCommitString(
+                inputContext, event.origKey().states().test(KeyState::Shift)));
             state->context_.clear();
             state->context_.clearContextWords();
             event.filterAndAccept();

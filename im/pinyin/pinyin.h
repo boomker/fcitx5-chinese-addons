@@ -538,8 +538,10 @@ private:
 
     std::pair<Text, Text> preedit(InputContext *inputContext) const;
     std::string preeditCommitString(InputContext *inputContext) const;
+    std::string preeditCommitString(InputContext *inputContext,
+                                    bool withSeparator) const;
     std::pair<std::string, size_t>
-    preeditWithCursor(InputContext *inputContext) const;
+    preeditWithCursor(InputContext *inputContext, bool forCommit = false) const;
     void setGroupedInput(InputContext *inputContext, bool grouped,
                          const std::vector<std::string> *groups = nullptr);
 

@@ -365,18 +365,18 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
         sendGroupedInput(frontend, ic, "ni");
         FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() == "ni");
         FCITX_ASSERT(ic->inputPanel().clientPreedit().cursor() == 2);
-        frontend->call<ITestFrontend::pushCommitExpectation>("BN IO");
+        frontend->call<ITestFrontend::pushCommitExpectation>("ni");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
         ic->setCapabilityFlags(CapabilityFlags{});
         sendGroupedInput(frontend, ic, "gp");
         // With compact correction disabled, both decoded initials have exact
-        // source spellings. Raw commit still expands the complete key groups.
+        // source spellings. Return commits those decoded ordinary keys.
         FCITX_ASSERT(ic->inputPanel().preedit().toString() == "g p")
             << ic->inputPanel().preedit().toString();
         FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 3)
             << ic->inputPanel().preedit().cursor();
-        frontend->call<ITestFrontend::pushCommitExpectation>("FG P");
+        frontend->call<ITestFrontend::pushCommitExpectation>("gp");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
         // The automatic ch/c partner has no exact c source spelling on the IO
@@ -387,8 +387,120 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
             << ic->inputPanel().preedit().toString();
         FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 4)
             << ic->inputPanel().preedit().cursor();
-        frontend->call<ITestFrontend::pushCommitExpectation>("IO P");
+        frontend->call<ITestFrontend::pushCommitExpectation>("ip");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
+    });
+}
+
+void testShuangpinEncodingCommit(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        for (const bool compact : {false, true}) {
+            for (const bool fullPinyin : {false, true}) {
+                const auto uuid =
+                    frontend->call<ITestFrontend::createInputContext>(
+                        "shuangpin-encoding-commit");
+                auto *ic = instance->inputContextManager().findByUUID(uuid);
+                ic->setCapabilityFlags(CapabilityFlag::Preedit);
+                configureGroupedShuangpin(instance, ic, "Xiaohe");
+                RawConfig config;
+                config.setValueByPath("PinyinInPreedit",
+                                      fullPinyin ? "True" : "False");
+                instance->inputMethodEngine(ic)->setConfigForInputMethod(
+                    *instance->inputMethodEntry(ic), config);
+                const auto type = [&](std::string_view input) {
+                    if (compact) {
+                        sendGroupedInput(frontend, ic, input);
+                    } else {
+                        for (const char chr : input) {
+                            frontend->call<ITestFrontend::keyEvent>(
+                                uuid, Key(static_cast<KeySym>(chr)), false);
+                        }
+                    }
+                };
+                const auto commit = [&](std::string_view key,
+                                        const std::string &expected) {
+                    frontend->call<ITestFrontend::pushCommitExpectation>(
+                        expected);
+                    frontend->call<ITestFrontend::keyEvent>(
+                        uuid, Key(std::string(key)), false);
+                    FCITX_ASSERT(ic->inputPanel().clientPreedit().empty());
+                };
+                for (const auto key :
+                     {"Return", "KP_Enter", "Shift+Return", "Shift+KP_Enter"}) {
+                    const bool separated =
+                        std::string_view(key).starts_with("Shift");
+                    type("nihc");
+                    commit(key, fullPinyin ? (separated ? "ni hao" : "nihao")
+                                           : (separated ? "ni hc" : "nihc"));
+                    type("ni'hc");
+                    commit(key, fullPinyin ? (separated ? "ni'hao" : "nihao")
+                                           : (separated ? "ni'hc" : "nihc"));
+                }
+                type("ni'hc");
+                findAndSelectCandidate(ic, "你");
+                commit("Return", fullPinyin ? "你hao" : "你hc");
+                type("ni'hc");
+                findAndSelectCandidate(ic, "你");
+                commit("Shift+Return", fullPinyin ? "你'hao" : "你'hc");
+
+                if (compact) {
+                    // The same group sequence also encodes bi/hua. Choosing a
+                    // non-first candidate must change the committed encoding.
+                    for (const auto key : {"Return", "Shift+Return"}) {
+                        type("nihc");
+                        const auto index = findCandidateOrDie(ic, "壁画");
+                        FCITX_ASSERT(index > 0);
+                        const auto list = ic->inputPanel().candidateList();
+                        list->toPageable()->setPage(index / list->size());
+                        list->toBulkCursor()->setGlobalCursorIndex(index);
+                        FCITX_ASSERT(list->cursorIndex() >= 0);
+                        commit(key,
+                               fullPinyin
+                                   ? (std::string_view(key).starts_with("Shift")
+                                          ? "bi hua"
+                                          : "bihua")
+                                   : (std::string_view(key).starts_with("Shift")
+                                          ? "bi hx"
+                                          : "bihx"));
+                    }
+                }
+            }
+        }
+    });
+}
+
+void testPinyinHighlightedEncodingCommit(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "pinyin-highlighted-encoding-commit");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        instance->setCurrentInputMethod(ic, "pinyin", true);
+        RawConfig config;
+        config.setValueByPath("Prediction", "False");
+        for (const bool fullPinyin : {false, true}) {
+            config.setValueByPath("PinyinInPreedit", fullPinyin ? "True" : "False");
+            instance->inputMethodEngine(ic)->setConfigForInputMethod(
+                *instance->inputMethodEntry(ic), config);
+            for (const auto word : {"西安", "西"}) {
+                for (const auto key : {"Return", "Shift+Return"}) {
+                    for (const char chr : std::string_view("xian")) {
+                        frontend->call<ITestFrontend::keyEvent>(
+                            uuid, Key(static_cast<KeySym>(chr)), false);
+                    }
+                    const auto index = findCandidateOrDie(ic, word);
+                    FCITX_ASSERT(index > 0);
+                    const auto list = ic->inputPanel().candidateList();
+                    list->toPageable()->setPage(index / list->size());
+                    list->toBulkCursor()->setGlobalCursorIndex(index);
+                    FCITX_ASSERT(list->cursorIndex() >= 0);
+                    frontend->call<ITestFrontend::pushCommitExpectation>(
+                        std::string_view(key).starts_with("Shift") ? "xi an" : "xian");
+                    frontend->call<ITestFrontend::keyEvent>(uuid, Key(key), false);
+                }
+            }
+        }
     });
 }
 
@@ -877,7 +989,7 @@ void testCustomGroupedShuangpinLayouts(Instance *instance) {
 
                 sendCustomGroupedInput(frontend, ic, groups, "q");
                 frontend->call<ITestFrontend::pushCommitExpectation>(
-                    groups == CustomRegroupedKeys ? "WQ" : "Q");
+                    ic->inputPanel().clientPreedit().toString());
                 frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"),
                                                         false);
             }
@@ -890,7 +1002,7 @@ void testCustomGroupedShuangpinLayouts(Instance *instance) {
         configureCustomGroups(frontend, ic, oneGroup);
         sendCustomGroupedInput(frontend, ic, oneGroup, "e");
         frontend->call<ITestFrontend::pushCommitExpectation>(
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+            ic->inputPanel().preedit().toString());
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
     });
 }
@@ -957,12 +1069,12 @@ void testCustomGroupedShuangpinAtomicConfig(Instance *instance) {
         ic->reset();
         sendGroupedProtocol(frontend, ic, 0x0200e202);
         sendCustomGroupedInput(frontend, ic, CustomRegroupedKeys, "q");
-        frontend->call<ITestFrontend::pushCommitExpectation>("WQ");
+        frontend->call<ITestFrontend::pushCommitExpectation>("w");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
         // Legacy indexed key presses still select the original partition.
         sendGroupedInput(frontend, ic, "q");
-        frontend->call<ITestFrontend::pushCommitExpectation>("Q");
+        frontend->call<ITestFrontend::pushCommitExpectation>("q");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
         configureCustomGroups(frontend, ic, CustomRegroupedKeys);
@@ -1020,7 +1132,7 @@ void testCustomGroupedShuangpinSemicolonAndIsolation(Instance *instance) {
         const auto preedit = first->inputPanel().preedit().toString();
         configureCustomGroups(frontend, first, singles); // MS requires ';'.
         FCITX_ASSERT(first->inputPanel().preedit().toString() == preedit);
-        frontend->call<ITestFrontend::pushCommitExpectation>("WQ");
+        frontend->call<ITestFrontend::pushCommitExpectation>("w");
         frontend->call<ITestFrontend::keyEvent>(firstUuid, Key("Return"), false);
         singles.emplace_back(";");
         configureCustomGroups(frontend, first, singles);
@@ -1031,11 +1143,11 @@ void testCustomGroupedShuangpinSemicolonAndIsolation(Instance *instance) {
         frontend->call<ITestFrontend::pushCommitExpectation>("应");
         findAndSelectCandidate(first, "应");
         sendCustomGroupedInput(frontend, first, singles, "q");
-        frontend->call<ITestFrontend::pushCommitExpectation>("Q");
+        frontend->call<ITestFrontend::pushCommitExpectation>("q");
         frontend->call<ITestFrontend::keyEvent>(firstUuid, Key("Return"),
                                                 false);
         sendCustomGroupedInput(frontend, second, CustomRegroupedKeys, "q");
-        frontend->call<ITestFrontend::pushCommitExpectation>("WQ");
+        frontend->call<ITestFrontend::pushCommitExpectation>("w");
         frontend->call<ITestFrontend::keyEvent>(secondUuid, Key("Return"),
                                                 false);
 
@@ -1046,7 +1158,7 @@ void testCustomGroupedShuangpinSemicolonAndIsolation(Instance *instance) {
         singles.pop_back(); // A valid Xiaohe partition may omit ';'.
         configureCustomGroups(frontend, third, singles);
         sendCustomGroupedInput(frontend, third, singles, "e");
-        frontend->call<ITestFrontend::pushCommitExpectation>("E");
+        frontend->call<ITestFrontend::pushCommitExpectation>("e");
         frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
         RawConfig changedProfile;
         changedProfile.setValueByPath("ShuangpinProfile", "MS");
@@ -1056,13 +1168,13 @@ void testCustomGroupedShuangpinSemicolonAndIsolation(Instance *instance) {
         FCITX_ASSERT(third->inputPanel().preedit().empty());
         FCITX_ASSERT(!third->inputPanel().candidateList());
         sendGroupedProtocol(frontend, third, 0x0200e300 + ('w' - 'a'));
-        frontend->call<ITestFrontend::pushCommitExpectation>("WE");
+        frontend->call<ITestFrontend::pushCommitExpectation>("w");
         frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
         changedProfile.setValueByPath("ShuangpinProfile", "Xiaohe");
         instance->inputMethodEngine(third)->setConfigForInputMethod(
             *instance->inputMethodEntry(third), changedProfile);
         sendGroupedProtocol(frontend, third, 0x0200e300 + ('w' - 'a'));
-        frontend->call<ITestFrontend::pushCommitExpectation>("W");
+        frontend->call<ITestFrontend::pushCommitExpectation>("w");
         frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
     });
 }
@@ -1515,6 +1627,8 @@ int main(int argc, char **testArgs) {
         testGroupedShuangpinSchemes(&instance);
         testGroupedShuangpinEditing(&instance);
         testGroupedShuangpinRawCommit(&instance);
+        testShuangpinEncodingCommit(&instance);
+        testPinyinHighlightedEncodingCommit(&instance);
         testGroupedShuangpinPrivateKeyGuard(&instance);
         testGroupedShuangpinSyllableActions(&instance);
         testGroupedShuangpinPreeditModes(&instance);
@@ -1539,6 +1653,8 @@ int main(int argc, char **testArgs) {
     testGroupedShuangpinSchemes(&instance);
     testGroupedShuangpinEditing(&instance);
     testGroupedShuangpinRawCommit(&instance);
+    testShuangpinEncodingCommit(&instance);
+    testPinyinHighlightedEncodingCommit(&instance);
     testGroupedShuangpinPrivateKeyGuard(&instance);
     testGroupedShuangpinSyllableActions(&instance);
     testGroupedShuangpinPreeditModes(&instance);
