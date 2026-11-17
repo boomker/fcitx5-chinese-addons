@@ -86,8 +86,7 @@ bestMatchPinyin(std::string_view pinyin, std::string_view candidatePinyin,
     libime::MatchedPinyinSyllablesWithFuzzyFlags syls;
     syls = context.useShuangpin()
                ? libime::PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
-                     pinyin, *context.shuangpinProfile(),
-                     context.fuzzyFlags())
+                     pinyin, *context.shuangpinProfile(), context.fuzzyFlags())
                : libime::PinyinEncoder::stringToSyllablesWithFuzzyFlags(
                      pinyin, context.ime()->correctionProfile().get(),
                      context.fuzzyFlags());
@@ -277,11 +276,35 @@ std::string SymbolCandidateWord::customPhraseString() const {
 }
 
 void SymbolCandidateWord::select(InputContext *inputContext) const {
+    selectSymbol(inputContext, symbol_);
+}
+
+void SymbolCandidateWord::setFoldedSymbols(std::vector<std::string> symbols) {
+    foldedSymbols_ = std::move(symbols);
+    // Hint that there is more behind this symbol.
+    setComment(foldedSymbols_.empty() ? Text() : Text("…"));
+    setSpaceBetweenComment(false);
+}
+
+void SymbolCandidateWord::setSourceComment(std::string_view source) {
+    setComment(Text(std::format("({})", source)));
+    setSpaceBetweenComment(false);
+}
+
+void SymbolCandidateWord::selectFoldedSymbol(InputContext *inputContext,
+                                             size_t index) const {
+    if (index < foldedSymbols_.size()) {
+        selectSymbol(inputContext, foldedSymbols_[index]);
+    }
+}
+
+void SymbolCandidateWord::selectSymbol(InputContext *inputContext,
+                                       const std::string &symbol) const {
     auto *state = inputContext->propertyFor(&engine_->factory());
     auto segmentLength =
         state->context_.size() - state->context_.selectedLength();
     segmentLength = std::min(segmentLength, candidateSegmentLength_);
-    state->context_.selectCustom(segmentLength, symbol_, encodedPinyin_);
+    state->context_.selectCustom(segmentLength, symbol, encodedPinyin_);
     engine_->updateUI(inputContext);
 }
 
@@ -398,7 +421,27 @@ void CustomCloudPinyinCandidateWord::select(InputContext *inputContext) const {
     CloudPinyinCandidateWord::select(inputContext);
 }
 
-enum { PINYIN_FORGET, PINYIN_CUSTOMPHRASE, PINYIN_DELETE_CUSTOMPHRASE };
+enum {
+    PINYIN_FORGET,
+    PINYIN_CUSTOMPHRASE,
+    PINYIN_DELETE_CUSTOMPHRASE,
+    // First of one action per folded symbol.
+    PINYIN_FOLDED_SYMBOL = 100,
+};
+
+// Marks the actions that stand for folded symbols. The Android UI lists them
+// in a bubble of their own instead of the action menu.
+constexpr std::string_view FoldedSymbolIcon = "folded-symbol";
+
+namespace {
+
+const SymbolCandidateWord *
+foldedSymbolCandidate(const CandidateWord &candidate) {
+    const auto *symbol = dynamic_cast<const SymbolCandidateWord *>(&candidate);
+    return symbol && !symbol->foldedSymbols().empty() ? symbol : nullptr;
+}
+
+} // namespace
 
 PinyinActionableCandidateList::PinyinActionableCandidateList(
     PinyinEngine *engine, InputContext *inputContext)
@@ -407,12 +450,25 @@ PinyinActionableCandidateList::PinyinActionableCandidateList(
 bool PinyinActionableCandidateList::hasAction(
     const CandidateWord &candidate) const {
     return isPinyinCandidate(candidate) ||
-           canBeInsertedAsCustomPhrase(candidate);
+           canBeInsertedAsCustomPhrase(candidate) ||
+           foldedSymbolCandidate(candidate);
 }
 
 std::vector<CandidateAction> PinyinActionableCandidateList::candidateActions(
     const CandidateWord &candidate) const {
     std::vector<CandidateAction> result;
+    if (const auto *symbol = foldedSymbolCandidate(candidate)) {
+        // Choosing among the folded symbols is all this candidate offers.
+        const auto &symbols = symbol->foldedSymbols();
+        for (size_t i = 0; i < symbols.size(); i++) {
+            CandidateAction action;
+            action.setId(PINYIN_FOLDED_SYMBOL + static_cast<int>(i));
+            action.setText(symbols[i]);
+            action.setIcon(std::string(FoldedSymbolIcon));
+            result.push_back(std::move(action));
+        }
+        return result;
+    }
     if (isPinyinCandidate(candidate)) {
         CandidateAction action;
         action.setId(PINYIN_FORGET);
@@ -481,6 +537,11 @@ void PinyinActionableCandidateList::triggerAction(
         }
     } break;
     default:
+        if (const auto *symbol = foldedSymbolCandidate(candidate);
+            symbol && id >= PINYIN_FOLDED_SYMBOL) {
+            symbol->selectFoldedSymbol(inputContext_,
+                                       id - PINYIN_FOLDED_SYMBOL);
+        }
         break;
     }
 }

@@ -375,6 +375,7 @@ FCITX_CONFIGURATION(
 
 struct EventSourceTime;
 class CandidateList;
+class FrequentEnglishWords;
 class PinyinEngine;
 
 enum class PinyinMode { Normal, ForgetCandidate, Punctuation };
@@ -475,6 +476,8 @@ public:
 
 private:
     bool shouldLearn(const InputContext *inputContext) const;
+    // Loaded when first asked for.
+    const FrequentEnglishWords &frequentEnglishWords();
 
     void cloudPinyinSelected(InputContext *inputContext,
                              const std::string &selected,
@@ -507,12 +510,10 @@ private:
     // Per-input-method configuration support: pinyin and shuangpin entries
     // store their settings in "conf/pinyin/<uniqueName>.conf" under PkgConfig,
     // independently from the global "conf/pinyin.conf" (the addon default).
-    std::filesystem::path
-    perImConfigPath(const std::string &uniqueName) const;
+    std::filesystem::path perImConfigPath(const std::string &uniqueName) const;
     // Loads (or creates) the cached per-IM config. Mutable member map is used
     // so that the const getConfigForInputMethod() can lazily populate it.
-    PinyinEngineConfig &
-    ensurePerImConfig(const std::string &uniqueName) const;
+    PinyinEngineConfig &ensurePerImConfig(const std::string &uniqueName) const;
     // Applies runtime state derived from config_ (fuzzy flags, preedit mode,
     // dict flags, ...) to ime_. Expected to be called whenever config_ gains
     // new values.
@@ -577,6 +578,7 @@ private:
     std::unique_ptr<HandlerTableEntry<EventHandler>> event_;
     CustomPhraseDict customPhrase_;
     SymbolDict symbols_;
+    std::unique_ptr<FrequentEnglishWords> frequentEnglishWords_;
     WorkerThread worker_;
     std::list<std::unique_ptr<TaskToken>> persistentTask_;
     std::list<std::unique_ptr<TaskToken>> tasks_;

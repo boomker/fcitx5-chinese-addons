@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <fcitx-config/rawconfig.h>
+#include <fcitx-utils/charutils.h>
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/eventloopinterface.h>
@@ -19,6 +20,7 @@
 #include <fcitx-utils/macros.h>
 #include <fcitx-utils/standardpaths.h>
 #include <fcitx-utils/testing.h>
+#include <fcitx-utils/utf8.h>
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidateaction.h>
@@ -480,7 +482,8 @@ void testPinyinHighlightedEncodingCommit(Instance *instance) {
         RawConfig config;
         config.setValueByPath("Prediction", "False");
         for (const bool fullPinyin : {false, true}) {
-            config.setValueByPath("PinyinInPreedit", fullPinyin ? "True" : "False");
+            config.setValueByPath("PinyinInPreedit",
+                                  fullPinyin ? "True" : "False");
             instance->inputMethodEngine(ic)->setConfigForInputMethod(
                 *instance->inputMethodEntry(ic), config);
             for (const auto word : {"西安", "西"}) {
@@ -496,8 +499,10 @@ void testPinyinHighlightedEncodingCommit(Instance *instance) {
                     list->toBulkCursor()->setGlobalCursorIndex(index);
                     FCITX_ASSERT(list->cursorIndex() >= 0);
                     frontend->call<ITestFrontend::pushCommitExpectation>(
-                        std::string_view(key).starts_with("Shift") ? "xi an" : "xian");
-                    frontend->call<ITestFrontend::keyEvent>(uuid, Key(key), false);
+                        std::string_view(key).starts_with("Shift") ? "xi an"
+                                                                   : "xian");
+                    frontend->call<ITestFrontend::keyEvent>(uuid, Key(key),
+                                                            false);
                 }
             }
         }
@@ -543,8 +548,10 @@ void confirmGroupedSyllable(InputContext *ic, std::string_view syllable) {
     auto *tabbed = candidates->toTabbed();
     FCITX_ASSERT(tabbed);
     const auto actions = tabbed->tabActions();
-    const auto action = std::ranges::find_if(
-        actions, [syllable](const auto &item) { return item.text() == syllable; });
+    const auto action =
+        std::ranges::find_if(actions, [syllable](const auto &item) {
+            return item.text() == syllable;
+        });
     FCITX_ASSERT(action != actions.end()) << syllable;
     const auto id = action->id();
     tabbed->triggerTabAction(id);
@@ -626,7 +633,8 @@ void testGroupedShuangpinPreeditModes(Instance *instance) {
             confirmGroupedSyllable(ic, "bi");
             FCITX_ASSERT(
                 ic->inputPanel().clientPreedit().toString().starts_with("bi"));
-            frontend->call<ITestFrontend::keyEvent>(uuid, Key("BackSpace"), false);
+            frontend->call<ITestFrontend::keyEvent>(uuid, Key("BackSpace"),
+                                                    false);
             FCITX_ASSERT(ic->inputPanel().clientPreedit().toString() ==
                          "ni hao");
             confirmGroupedSyllable(ic, "ni");
@@ -998,7 +1006,8 @@ void testCustomGroupedShuangpinLayouts(Instance *instance) {
             "custom-grouped-without-semicolon");
         auto *ic = instance->inputContextManager().findByUUID(uuid);
         configureGroupedShuangpin(instance, ic, "Xiaohe");
-        const std::vector<std::string> oneGroup = {"abcdefghijklmnopqrstuvwxyz"};
+        const std::vector<std::string> oneGroup = {
+            "abcdefghijklmnopqrstuvwxyz"};
         configureCustomGroups(frontend, ic, oneGroup);
         sendCustomGroupedInput(frontend, ic, oneGroup, "e");
         frontend->call<ITestFrontend::pushCommitExpectation>(
@@ -1133,7 +1142,8 @@ void testCustomGroupedShuangpinSemicolonAndIsolation(Instance *instance) {
         configureCustomGroups(frontend, first, singles); // MS requires ';'.
         FCITX_ASSERT(first->inputPanel().preedit().toString() == preedit);
         frontend->call<ITestFrontend::pushCommitExpectation>("w");
-        frontend->call<ITestFrontend::keyEvent>(firstUuid, Key("Return"), false);
+        frontend->call<ITestFrontend::keyEvent>(firstUuid, Key("Return"),
+                                                false);
         singles.emplace_back(";");
         configureCustomGroups(frontend, first, singles);
         configureCustomGroups(frontend, second, CustomRegroupedKeys);
@@ -1151,15 +1161,17 @@ void testCustomGroupedShuangpinSemicolonAndIsolation(Instance *instance) {
         frontend->call<ITestFrontend::keyEvent>(secondUuid, Key("Return"),
                                                 false);
 
-        const auto thirdUuid = frontend->call<ITestFrontend::createInputContext>(
-            "custom-grouped-profile-change");
+        const auto thirdUuid =
+            frontend->call<ITestFrontend::createInputContext>(
+                "custom-grouped-profile-change");
         auto *third = instance->inputContextManager().findByUUID(thirdUuid);
         configureGroupedShuangpin(instance, third, "Xiaohe");
         singles.pop_back(); // A valid Xiaohe partition may omit ';'.
         configureCustomGroups(frontend, third, singles);
         sendCustomGroupedInput(frontend, third, singles, "e");
         frontend->call<ITestFrontend::pushCommitExpectation>("e");
-        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
+        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"),
+                                                false);
         RawConfig changedProfile;
         changedProfile.setValueByPath("ShuangpinProfile", "MS");
         instance->inputMethodEngine(third)->setConfigForInputMethod(
@@ -1169,13 +1181,312 @@ void testCustomGroupedShuangpinSemicolonAndIsolation(Instance *instance) {
         FCITX_ASSERT(!third->inputPanel().candidateList());
         sendGroupedProtocol(frontend, third, 0x0200e300 + ('w' - 'a'));
         frontend->call<ITestFrontend::pushCommitExpectation>("w");
-        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
+        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"),
+                                                false);
         changedProfile.setValueByPath("ShuangpinProfile", "Xiaohe");
         instance->inputMethodEngine(third)->setConfigForInputMethod(
             *instance->inputMethodEntry(third), changedProfile);
         sendGroupedProtocol(frontend, third, 0x0200e300 + ('w' - 'a'));
         frontend->call<ITestFrontend::pushCommitExpectation>("w");
-        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"), false);
+        frontend->call<ITestFrontend::keyEvent>(thirdUuid, Key("Return"),
+                                                false);
+    });
+}
+
+enum class CandidateShape { Character, Word, Symbol, Other };
+
+// Tell candidates apart by their text alone, as a user would see them.
+CandidateShape candidateShape(const std::string &text) {
+    size_t length = 0;
+    bool readable = true;
+    bool symbol = true;
+    for (const uint32_t c : utf8::MakeUTF8CharRange(text)) {
+        const bool han = (c >= 0x3400 && c <= 0x9fff) ||
+                         (c >= 0xf900 && c <= 0xfaff) ||
+                         (c >= 0x20000 && c <= 0x3ffff);
+        const bool letter =
+            c < 0x80 && (charutils::islower(static_cast<char>(c)) ||
+                         charutils::isupper(static_cast<char>(c)));
+        readable = readable && (han || letter);
+        symbol = symbol && c >= 0x80 && !han;
+        length++;
+    }
+    if (length == 0) {
+        return CandidateShape::Other;
+    }
+    if (readable) {
+        return length == 1 ? CandidateShape::Character : CandidateShape::Word;
+    }
+    return symbol ? CandidateShape::Symbol : CandidateShape::Other;
+}
+
+std::vector<std::string> allCandidateTexts(InputContext *ic) {
+    std::vector<std::string> texts;
+    auto candidateList = ic->inputPanel().candidateList();
+    FCITX_ASSERT(candidateList);
+    auto *bulk = candidateList->toBulk();
+    for (int i = 0; i < bulk->totalSize(); i++) {
+        texts.push_back(bulk->candidateFromAll(i).text().toString());
+    }
+    return texts;
+}
+
+bool hasAdjacentSymbols(const std::vector<std::string> &texts) {
+    for (size_t i = 1; i < texts.size(); i++) {
+        if (candidateShape(texts[i - 1]) == CandidateShape::Symbol &&
+            candidateShape(texts[i]) == CandidateShape::Symbol) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void testTwoKeyShuangpinBalance(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *testfrontend = instance->addonManager().addon("testfrontend");
+        auto uuid = testfrontend->call<ITestFrontend::createInputContext>(
+            "two-key-balance");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        FCITX_ASSERT(ic);
+        instance->setCurrentInputMethod(ic, "shuangpin", true);
+        // Abbreviations from two keys on are what floods a syllable with
+        // words. The defaults are restored at the end for the other tests.
+        const auto configure = [instance, ic](bool twoKeyAbbreviation) {
+            RawConfig config;
+            config.setValueByPath("ShuangpinProfile", "Xiaohe");
+            config.setValueByPath("Prediction", "False");
+            config.setValueByPath("PageSize", twoKeyAbbreviation ? "5" : "7");
+            config.setValueByPath("PartialSpLength",
+                                  twoKeyAbbreviation ? "2" : "4");
+            config.setValueByPath("Fuzzy/PartialSp",
+                                  twoKeyAbbreviation ? "True" : "False");
+            config.setValueByPath("Fuzzy/Correction", "QWERTY");
+            instance->inputMethodEngine(ic)->setConfigForInputMethod(
+                *instance->inputMethodEntry(ic), config);
+            ic->reset();
+        };
+        const auto type = [testfrontend, uuid](std::string_view keys) {
+            for (const char key : keys) {
+                testfrontend->call<ITestFrontend::keyEvent>(
+                    uuid, Key(static_cast<KeySym>(key)), false);
+            }
+        };
+        configure(true);
+
+        // "ks" is kong, and also abbreviates words like kai'shi.
+        constexpr size_t frontSize = 5;
+        type("ks");
+        const auto texts = allCandidateTexts(ic);
+        FCITX_ASSERT(texts.size() > frontSize);
+        FCITX_ASSERT(candidateShape(texts[0]) != CandidateShape::Symbol);
+        size_t words = 0;
+        size_t symbols = 0;
+        for (size_t i = 0; i < frontSize; i++) {
+            switch (candidateShape(texts[i])) {
+            case CandidateShape::Word:
+                words++;
+                // Only short English words may sit on the front page.
+                FCITX_ASSERT(texts[i].size() <= 4 ||
+                             !charutils::islower(texts[i][0]))
+                    << texts[i];
+                break;
+            case CandidateShape::Symbol:
+                symbols++;
+                break;
+            default:
+                break;
+            }
+        }
+        FCITX_ASSERT(words <= 2) << texts;
+        FCITX_ASSERT(symbols <= 1) << texts;
+        FCITX_ASSERT(findCandidateOrDie(ic, "空") < static_cast<int>(frontSize))
+            << texts;
+        const std::vector<std::string> expectedFront = {"开始", "▶️", "空",
+                                                        "可是", "孔"};
+        FCITX_ASSERT(std::vector<std::string>(texts.begin(),
+                                              texts.begin() + frontSize) ==
+                     expectedFront)
+            << texts;
+        // Independent emoji is deferred, never merged into a different run.
+        FCITX_ASSERT(texts[frontSize] == "🈳") << texts;
+        // Runs on later pages keep their individual symbols.
+        FCITX_ASSERT(hasAdjacentSymbols(
+            std::vector<std::string>(texts.begin() + frontSize, texts.end())))
+            << texts;
+
+        // Behind the front page the syllable's characters come before the
+        // remaining words, and one-key matches come after them.
+        size_t firstRestWord = frontSize;
+        while (firstRestWord < texts.size() &&
+               candidateShape(texts[firstRestWord]) != CandidateShape::Word) {
+            firstRestWord++;
+        }
+        FCITX_ASSERT(firstRestWord < texts.size()) << texts;
+        FCITX_ASSERT(static_cast<size_t>(findCandidateOrDie(ic, "控")) <
+                     firstRestWord)
+            << texts;
+        FCITX_ASSERT(static_cast<size_t>(findCandidateOrDie(ic, "可")) >
+                     firstRestWord)
+            << texts;
+
+        // Only the head emoji carries the folded choices and the ellipsis.
+        // Its actions contain no pin, forget, reset or Chinese decomposition.
+        auto candidateList = ic->inputPanel().candidateList();
+        auto *actionable = candidateList->toActionable();
+        FCITX_ASSERT(actionable);
+        const auto &head = candidateList->toBulk()->candidateFromAll(1);
+        FCITX_ASSERT(head.comment().toString() == "…");
+        FCITX_ASSERT(actionable->hasAction(head));
+        const auto actions = actionable->candidateActions(head);
+        FCITX_ASSERT(actions.size() == 1);
+        FCITX_ASSERT(actions.front().text() == "🔛");
+        FCITX_ASSERT(actions.front().icon() == "folded-symbol");
+        FCITX_ASSERT(!actions.front().isSeparator());
+        const auto &deferred =
+            candidateList->toBulk()->candidateFromAll(frontSize);
+        FCITX_ASSERT(deferred.comment().toString() == "(空)");
+        for (const auto &action : actionable->candidateActions(deferred)) {
+            FCITX_ASSERT(action.icon() != "folded-symbol");
+        }
+        for (const auto word : {"开始", "空"}) {
+            const auto &candidate = candidateList->toBulk()->candidateFromAll(
+                findCandidateOrDie(ic, word));
+            for (const auto &action : actionable->candidateActions(candidate)) {
+                FCITX_ASSERT(action.icon() != "folded-symbol") << word;
+            }
+        }
+        testfrontend->call<ITestFrontend::pushCommitExpectation>("🔛");
+        actionable->triggerAction(head, actions.front().id());
+        FCITX_ASSERT(!ic->inputPanel().candidateList());
+
+        // "bq" is no syllable, so it can only abbreviate words: they keep
+        // the whole front page instead of yielding to one-key matches.
+        type("bq");
+        const auto abbreviated = allCandidateTexts(ic);
+        FCITX_ASSERT(abbreviated.size() > frontSize);
+        symbols = 0;
+        for (size_t i = 0; i < frontSize; i++) {
+            const auto shape = candidateShape(abbreviated[i]);
+            FCITX_ASSERT(shape == CandidateShape::Word ||
+                         shape == CandidateShape::Symbol)
+                << abbreviated;
+            symbols += shape == CandidateShape::Symbol;
+        }
+        FCITX_ASSERT(symbols <= 1) << abbreviated;
+        ic->reset();
+
+        // A valid syllable with only one character still uses abbreviation
+        // words instead of pulling one-key guesses into the front page.
+        type("gw");
+        const auto fewCharacters = allCandidateTexts(ic);
+        FCITX_ASSERT(
+            std::vector<std::string>(fewCharacters.begin(),
+                                     fewCharacters.begin() + frontSize) ==
+            std::vector<std::string>({"给", "岗位", "国外", "购物", "更为"}))
+            << fewCharacters;
+        ic->reset();
+
+        // Corrections cannot lead when an exact character or a dictionary
+        // word is available. Engine-assembled sentences do not get promoted.
+        for (const auto &[input, expected] :
+             std::vector<std::pair<std::string_view, std::string_view>>{
+                 {"se", "色"},
+                 {"no", "挪"},
+                 {"we", "巍峨"},
+                 {"fe", "份额"},
+                 {"os", "种"},
+                 {"ra", "他"}}) {
+            type(input);
+            const auto actual = allCandidateTexts(ic);
+            FCITX_ASSERT(actual.front() == expected) << input << ": " << actual;
+            ic->reset();
+        }
+
+        // The same emoji rules apply to a longer shuangpin input.
+        type("kdui");
+        const auto longer = allCandidateTexts(ic);
+        FCITX_ASSERT(longer[0] == "开始") << longer;
+        FCITX_ASSERT(longer[1] == "▶️") << longer;
+        FCITX_ASSERT(ic->inputPanel()
+                         .candidateList()
+                         ->toBulk()
+                         ->candidateFromAll(1)
+                         .comment()
+                         .toString() == "…");
+        FCITX_ASSERT(hasAdjacentSymbols(
+            std::vector<std::string>(longer.begin() + frontSize, longer.end())))
+            << longer;
+        ic->reset();
+
+        // A rare completion is still selectable, but cannot crowd the front
+        // page of a longer input. A frequent longer word keeps its position.
+        type("ksha");
+        FCITX_ASSERT(findCandidateOrDie(ic, "osha") >=
+                     static_cast<int>(frontSize))
+            << allCandidateTexts(ic);
+        ic->reset();
+        type("hello");
+        FCITX_ASSERT(findCandidateOrDie(ic, "hello") <
+                     static_cast<int>(frontSize))
+            << allCandidateTexts(ic);
+        ic->reset();
+
+        // Capitals ask for the input as it was typed.
+        type("Ks");
+        FCITX_ASSERT(findCandidateOrDie(ic, "Ks") < 2);
+        ic->reset();
+
+        configure(false);
+        type("ks");
+        const auto defaults = allCandidateTexts(ic);
+        FCITX_ASSERT(defaults[0] == "空") << defaults;
+        const auto defaultFrontSize = ic->inputPanel().candidateList()->size();
+        FCITX_ASSERT(!hasAdjacentSymbols(std::vector<std::string>(
+            defaults.begin(), defaults.begin() + defaultFrontSize)))
+            << defaults;
+        FCITX_ASSERT(hasAdjacentSymbols(std::vector<std::string>(
+            defaults.begin() + defaultFrontSize, defaults.end())))
+            << defaults;
+        ic->reset();
+
+        // Full pinyin preserves the relative order of characters and split
+        // dictionary words. Emoji still gets only one front-page position.
+        instance->setCurrentInputMethod(ic, "pinyin", true);
+        configure(true);
+        for (const auto input : {"xian", "yue", "bian"}) {
+            type(input);
+            const auto full = allCandidateTexts(ic);
+            FCITX_ASSERT(full.size() > frontSize) << input;
+            symbols = 0;
+            for (size_t i = 0; i < frontSize; i++) {
+                symbols += candidateShape(full[i]) == CandidateShape::Symbol;
+            }
+            FCITX_ASSERT(symbols <= 1) << input << ": " << full;
+            if (std::string_view(input) == "xian") {
+                FCITX_ASSERT(findCandidateOrDie(ic, "西安") <
+                             findCandidateOrDie(ic, "显"))
+                    << full;
+            } else if (std::string_view(input) == "bian") {
+                FCITX_ASSERT(findCandidateOrDie(ic, "彼岸") <
+                             findCandidateOrDie(ic, "辨"))
+                    << full;
+            }
+            ic->reset();
+        }
+        // Full pinyin also folds only the front-page run into its first emoji.
+        type("kaishi");
+        const auto fullStart = allCandidateTexts(ic);
+        FCITX_ASSERT(fullStart[0] == "开始") << fullStart;
+        FCITX_ASSERT(fullStart[1] == "▶️") << fullStart;
+        candidateList = ic->inputPanel().candidateList();
+        const auto &fullHead = candidateList->toBulk()->candidateFromAll(1);
+        const auto fullActions =
+            candidateList->toActionable()->candidateActions(fullHead);
+        FCITX_ASSERT(fullActions.size() == 1);
+        FCITX_ASSERT(fullActions.front().text() == "🔛");
+        FCITX_ASSERT(fullActions.front().icon() == "folded-symbol");
+        ic->reset();
+        configure(false);
     });
 }
 
@@ -1612,7 +1923,8 @@ int main(int argc, char **testArgs) {
         TESTING_BINARY_DIR, {"bin"},
         {TESTING_BINARY_DIR "/test", TESTING_BINARY_DIR "/im",
          TESTING_BINARY_DIR "/modules", TESTING_SOURCE_DIR "/modules",
-         StandardPaths::fcitxPath("pkgdatadir")});
+         // For pinyin/symbols.
+         TESTING_SOURCE_DIR "/im", StandardPaths::fcitxPath("pkgdatadir")});
     // fcitx::Log::setLogRule("default=5,table=5,libime-table=5");
     char arg0[] = "testpinyin";
     char arg1[] = "--disable=all";
@@ -1669,6 +1981,7 @@ int main(int argc, char **testArgs) {
     testCustomGroupedShuangpinAtomicConfig(&instance);
     testCustomGroupedShuangpinSyllableActions(&instance);
     testCustomGroupedShuangpinSemicolonAndIsolation(&instance);
+    testTwoKeyShuangpinBalance(&instance);
     testForget(&instance);
     testActionInStrokeFilter(&instance);
     testPinyinTabFilter(&instance);

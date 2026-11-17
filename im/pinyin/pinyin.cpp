@@ -6,6 +6,7 @@
  */
 
 #include "pinyin.h"
+#include "candidatebalance.h"
 #include "cloudpinyinmatch.h"
 
 // Use relative path so we don't need import export target.
@@ -388,6 +389,58 @@ std::string getEncodedPinyin(const libime::SentenceResult &result) {
         }
     }
     return encodedPinyin;
+}
+
+// Two shuangpin keys are one syllable. Capitals and separators mean the user
+// is typing something else.
+bool isTwoKeyShuangpin(const libime::PinyinContext &context,
+                       std::string_view pinyin) {
+    return context.useShuangpin() && context.selectedLength() == 0 &&
+           context.size() == 2 && pinyin.size() == 2 &&
+           std::ranges::none_of(pinyin, [](char c) {
+               return c == '\'' || charutils::isupper(c);
+           });
+}
+
+CandidateKind
+candidateKind(const PinyinAbstractCandidateWord &candidate,
+              std::string_view text,
+              const std::vector<libime::SentenceResult> &pinyinCandidates,
+              size_t inputLength, const libime::LanguageModelBase &model,
+              const std::function<bool(std::string_view)> &isCommonEnglish) {
+    const bool single = utf8::length(text) == 1;
+    if (!candidate.isPinyinCandidate() &&
+        dynamic_cast<const SpellCandidateWord *>(&candidate)) {
+        return isCommonEnglish(text) ? CandidateKind::CommonEnglish
+                                     : CandidateKind::RareEnglish;
+    }
+    // Custom phrases, cloud results and stroke matches sit where the user or
+    // the engine put them.
+    if (!candidate.isPinyinCandidate() || candidate.isCustomPhrase()) {
+        return single ? CandidateKind::PinnedSingle
+                      : CandidateKind::PinnedPhrase;
+    }
+    const auto &sentence =
+        pinyinCandidates[static_cast<const PinyinCandidateWord &>(candidate)
+                             .candidateIndex()]
+            .sentence();
+    // Characters the language model has never seen are too rare to be listed
+    // ahead of words.
+    const bool exact =
+        candidate.selectLength() == inputLength &&
+        std::ranges::none_of(
+            sentence, [single, &model](const libime::LatticeNode *node) {
+                return node->as<libime::PinyinLatticeNode>().isCorrection() ||
+                       (single && model.isNodeUnknown(*node));
+            });
+    if (single) {
+        return exact ? CandidateKind::Single : CandidateKind::LooseSingle;
+    }
+    if (!exact) {
+        return CandidateKind::LoosePhrase;
+    }
+    return sentence.size() == 1 ? CandidateKind::Phrase
+                                : CandidateKind::Sentence;
 }
 
 std::optional<int> selectCharFromCandidateIndex(const Key &key,
@@ -1140,36 +1193,49 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             candidates, std::ranges::next(candidates.begin(), middle),
             candidateCompare);
 
-        // Apply the candidate to candidate generation.
-        for (auto &candidatePtr : candidates) {
-            // Candidate pointer shall still valid here.
-            auto *candidate = candidatePtr.get();
-            auto candidateString = candidate->text().toString();
-
-            std::vector<std::string> luaExtraCandidates;
+        // Candidates that are generated from another candidate.
+        struct CandidateExtras {
+            std::vector<std::string> lua;
+            const std::vector<std::string> *symbols = nullptr;
+        };
+        const auto extrasFor = [&](const PinyinAbstractCandidateWord &candidate,
+                                   const std::string &candidateString) {
+            CandidateExtras extras;
 #ifdef FCITX_HAS_LUA
             // Only trigger lua for top N candidates to avoid too much overhead.
-            if (candidate->order() <
+            if (candidate.order() <
                     std::max<size_t>(*config_.nbest, *config_.pageSize) &&
                 imeapi()) {
-                luaExtraCandidates =
-                    luaCandidateTrigger(inputContext, candidateString);
+                extras.lua = luaCandidateTrigger(inputContext, candidateString);
             }
+#else
+            FCITX_UNUSED(candidate);
 #endif
-
-            // use candidateString before it is moved.
-            const std::vector<std::string> *symbols = nullptr;
             if (*config_.symbolsEnabled) {
-                symbols = symbols_.lookup(candidateString);
+                extras.symbols = symbols_.lookup(candidateString);
             }
+            return extras;
+        };
 
-            candidateList->append(std::move(candidatePtr));
-            for (auto &extraCandidate : luaExtraCandidates) {
-                candidateList->append<LuaCandidateWord>(
-                    this, candidate->selectLength(), std::move(extraCandidate));
-            }
+        std::vector<std::unique_ptr<SymbolCandidateWord>> deferredSymbols;
+        // With foldSymbols only the first symbol is listed and carries the
+        // others. Independent front-page runs wait until after the page.
+        const auto appendCandidate =
+            [&](std::unique_ptr<PinyinAbstractCandidateWord> candidatePtr,
+                CandidateExtras extras, bool foldSymbols, bool deferSymbols) {
+                // Candidate pointer shall still valid here.
+                auto *candidate = candidatePtr.get();
+                candidateList->append(std::move(candidatePtr));
+                for (auto &extraCandidate : extras.lua) {
+                    candidateList->append<LuaCandidateWord>(
+                        this, candidate->selectLength(),
+                        std::move(extraCandidate));
+                }
 
-            if (symbols) {
+                if (!extras.symbols || extras.symbols->empty()) {
+                    return;
+                }
+                const auto &symbols = *extras.symbols;
                 std::string encodedPinyin;
                 int pinyinCandidateIndex = -1;
                 if (candidate->isPinyinCandidate()) {
@@ -1179,14 +1245,69 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                     encodedPinyin = getEncodedPinyin(
                         pinyinCandidates[pinyinCandidateIndex]);
                 }
-                for (const auto &symbol : *symbols) {
-                    const bool isFull =
-                        candidate->selectLength() == pyBeforeCursor.size();
-                    candidateList->append<SymbolCandidateWord>(
-                        this, symbol, encodedPinyin, candidate->selectLength(),
-                        isFull, pinyinCandidateIndex);
+                const bool isFull =
+                    candidate->selectLength() == pyBeforeCursor.size();
+                const auto listed = foldSymbols ? 1 : symbols.size();
+                for (size_t i = 0; i < listed; i++) {
+                    auto symbolCandidate =
+                        std::make_unique<SymbolCandidateWord>(
+                            this, symbols[i], encodedPinyin,
+                            candidate->selectLength(), isFull,
+                            pinyinCandidateIndex);
+                    if (foldSymbols) {
+                        symbolCandidate->setFoldedSymbols(
+                            {std::next(symbols.begin()), symbols.end()});
+                    }
+                    if (deferSymbols) {
+                        symbolCandidate->setSourceComment(
+                            candidate->text().toString());
+                        deferredSymbols.push_back(std::move(symbolCandidate));
+                    } else {
+                        candidateList->append(std::move(symbolCandidate));
+                    }
                 }
-            }
+            };
+
+        // Two shuangpin keys get their characters and words balanced. Any
+        // other input keeps its order apart from rare English words.
+        const bool twoKey = isTwoKeyShuangpin(context, pyBeforeCursor);
+        // Capitals show that the user is typing English.
+        const bool hasUpper =
+            std::ranges::any_of(pyBeforeCursor, charutils::isupper);
+        const auto isCommonEnglish = [&](std::string_view word) {
+            return hasUpper || isCommonShortEnglishWord(word) ||
+                   (!twoKey && frequentEnglishWords().contains(word));
+        };
+        std::vector<CandidateExtras> extras;
+        std::vector<CandidateInfo> infos;
+        extras.reserve(candidates.size());
+        infos.reserve(candidates.size());
+        for (const auto &candidate : candidates) {
+            const auto candidateString = candidate->text().toString();
+            const auto &extra =
+                extras.emplace_back(extrasFor(*candidate, candidateString));
+            infos.push_back(
+                {candidateKind(*candidate, candidateString, pinyinCandidates,
+                               pyBeforeCursor.size(), *ime_->model(),
+                               isCommonEnglish),
+                 extra.lua.size(), extra.symbols && !extra.symbols->empty()});
+        }
+        // The front page is what a user sees without paging or expanding.
+        constexpr size_t minFrontSize = 5;
+        const auto frontSize =
+            std::max<size_t>(minFrontSize, *config_.pageSize);
+        const auto placements =
+            twoKey ? balanceTwoKeyCandidates(infos, {.frontSize = frontSize})
+                   : arrangeCandidates(infos, frontSize);
+        for (const auto &[index, foldSymbols, deferSymbols] : placements) {
+            appendCandidate(std::move(candidates[index]),
+                            std::move(extras[index]), foldSymbols,
+                            deferSymbols);
+        }
+        auto symbolIndex =
+            std::min<size_t>(frontSize, candidateList->totalSize());
+        for (auto &symbol : deferredSymbols) {
+            candidateList->insert(symbolIndex++, std::move(symbol));
         }
 
         candidateList->setSelectionKey(selectionKeys_);
@@ -1203,6 +1324,24 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
     } while (0);
     inputContext->updatePreedit();
     inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
+}
+
+const FrequentEnglishWords &PinyinEngine::frequentEnglishWords() {
+    if (!frequentEnglishWords_) {
+        frequentEnglishWords_ = std::make_unique<FrequentEnglishWords>();
+        // The dictionary that the English candidates are looked up in.
+        const auto file = StandardPaths::global().open(
+            StandardPathsType::PkgData, "spell/en_dict.fscd",
+            StandardPathsMode::System);
+        if (file.isValid()) {
+            IFDStreamBuf buffer(file.fd());
+            std::istream in(&buffer);
+            const std::string data{std::istreambuf_iterator<char>(in),
+                                   std::istreambuf_iterator<char>()};
+            frequentEnglishWords_->load(data);
+        }
+    }
+    return *frequentEnglishWords_;
 }
 
 bool PinyinEngine::shouldLearn(const InputContext *inputContext) const {
@@ -1525,8 +1664,7 @@ void PinyinEngine::populateConfig() {
                     msg, actions, -1,
                     [this](const std::string &action) {
                         if (action == "yes") {
-                            for (auto *configPtr :
-                                 {&config_, &globalConfig_}) {
+                            for (auto *configPtr : {&config_, &globalConfig_}) {
                                 configPtr->cloudPinyinEnabled.setValue(true);
                             }
                             save();
@@ -1720,8 +1858,8 @@ PinyinEngine::ensurePerImConfig(const std::string &uniqueName) const {
     globalConfig_.save(defaultRaw);
     config.load(defaultRaw, false);
 
-    if (auto file = StandardPaths::global().open(
-            StandardPathsType::PkgConfig, perImConfigPath(uniqueName));
+    if (auto file = StandardPaths::global().open(StandardPathsType::PkgConfig,
+                                                 perImConfigPath(uniqueName));
         file.isValid()) {
         RawConfig fileRaw;
         readFromIni(fileRaw, file.fd());
@@ -2898,7 +3036,7 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
             if (state->groupedInput_ && state->context_.cancelSyllable()) {
                 // Undo the latest syllable confirmation before deleting keys.
             } else if (*config_.useBackSpaceToUnselect &&
-                state->context_.selectedLength()) {
+                       state->context_.selectedLength()) {
                 state->context_.cancel();
             } else {
                 state->context_.backspace();

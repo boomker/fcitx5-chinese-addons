@@ -172,9 +172,24 @@ public:
     std::string customPhraseString() const override;
     int candidateIndex() const override { return pinyinCandidateIndex_; }
 
+    // The symbols that would follow this one as candidates of their own. They
+    // are folded into this candidate and offered as its actions instead.
+    const std::vector<std::string> &foldedSymbols() const {
+        return foldedSymbols_;
+    }
+    void setFoldedSymbols(std::vector<std::string> symbols);
+    // Identify the original text when this symbol is moved to a later page.
+    void setSourceComment(std::string_view source);
+    // Select foldedSymbols()[index] the way this candidate would be selected.
+    void selectFoldedSymbol(InputContext *inputContext, size_t index) const;
+
 private:
+    void selectSymbol(InputContext *inputContext,
+                      const std::string &symbol) const;
+
     PinyinEngine *engine_;
     std::string symbol_;
+    std::vector<std::string> foldedSymbols_;
     size_t candidateSegmentLength_ = 0;
     const bool isFull_ = false;
     std::string encodedPinyin_;
