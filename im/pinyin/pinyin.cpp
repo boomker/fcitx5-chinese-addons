@@ -16,6 +16,7 @@
 #include "customphrase.h"
 #include "notifications_public.h"
 #include "pinyincandidate.h"
+#include "pinyinconfigmigration.h"
 #include "pinyinhelper_public.h"
 #include "punctuation_public.h"
 #include "spell_public.h"
@@ -184,10 +185,11 @@ std::string groupedInputText(std::string_view input,
         if (iter == groups.end()) {
             result += chr;
         } else {
-            for (auto key : *iter) {
-                if (key != ';' || semicolon) {
-                    result += uppercase ? charutils::toupper(key) : key;
-                }
+            // A pending source key is shown by its representative character;
+            // the full group label belongs to the physical keyboard button.
+            const auto key = iter->front();
+            if (key != ';' || semicolon) {
+                result += uppercase ? charutils::toupper(key) : key;
             }
         }
     }
@@ -832,6 +834,22 @@ void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped,
             inputContext->commitString(text);
         }
         doReset(inputContext);
+    }
+    if (grouped && !*config_.compactTypoDefaultApplied) {
+        // Apply after committing the old composition: changing IME flags
+        // clears matching contexts.
+        config_.fuzzyConfig.mutableValue()->commonTypo.setValue(false);
+        config_.compactTypoDefaultApplied.setValue(true);
+        if (const auto *entry = instance_->inputMethodEntry(inputContext)) {
+            auto &saved = ensurePerImConfig(entry->uniqueName());
+            saved.fuzzyConfig.mutableValue()->commonTypo.setValue(false);
+            saved.compactTypoDefaultApplied.setValue(true);
+            safeSaveAsIni(saved, StandardPathsType::PkgConfig,
+                          perImConfigPath(entry->uniqueName()));
+        }
+        ime_->setFuzzyFlags(ime_->fuzzyFlags()
+                               .unset(libime::PinyinFuzzyFlag::CommonTypo)
+                               .unset(libime::PinyinFuzzyFlag::AdvancedTypo));
     }
     if (groupsChanged) {
         state->groupedKeys_ = *groups;
@@ -1702,7 +1720,9 @@ void PinyinEngine::applyImeRuntime() {
     SET_FUZZY_FLAG(inner, Inner)
     SET_FUZZY_FLAG(innerShort, InnerShort)
     SET_FUZZY_FLAG(partialFinal, PartialFinal)
-    SET_FUZZY_FLAG(partialSp, PartialSp)
+    if (*config_.partialSpLength > 0) {
+        flags |= libime::PinyinFuzzyFlag::PartialSp;
+    }
     SET_FUZZY_FLAG(v, V_U)
     SET_FUZZY_FLAG(an, AN_ANG)
     SET_FUZZY_FLAG(en, EN_ENG)
@@ -1812,7 +1832,11 @@ void PinyinEngine::applyShuangpinProfile(const InputMethodEntry &entry) {
 
 void PinyinEngine::reloadConfig() {
     PINYIN_DEBUG() << "Reload pinyin config.";
-    readAsIni(config_, "conf/pinyin.conf");
+    RawConfig raw;
+    readAsIni(raw, "conf/pinyin.conf");
+    migrateAbbreviationConfig(raw);
+    config_.load(raw);
+    config_.abbreviationConfigMigrated.setValue(true);
     // Drop the per-IM caches, so that entries without their own config file
     // re-seed from the refreshed global defaults.
     perImConfigs_.clear();
@@ -1857,12 +1881,18 @@ PinyinEngine::ensurePerImConfig(const std::string &uniqueName) const {
     RawConfig defaultRaw;
     globalConfig_.save(defaultRaw);
     config.load(defaultRaw, false);
+    if (uniqueName == "pinyin") {
+        // Full pinyin keeps the existing default abbreviation threshold of 2.
+        config.partialSpLength.setValue(2);
+        config.partialSpLength.syncDefaultValueToCurrent();
+    }
 
     if (auto file = StandardPaths::global().open(StandardPathsType::PkgConfig,
                                                  perImConfigPath(uniqueName));
         file.isValid()) {
         RawConfig fileRaw;
         readFromIni(fileRaw, file.fd());
+        migrateAbbreviationConfig(fileRaw, uniqueName == "pinyin");
         // Overlay the per-IM file on top of the global defaults.
         config.load(fileRaw, false);
     }
@@ -1873,8 +1903,6 @@ PinyinEngine::ensurePerImConfig(const std::string &uniqueName) const {
     if (uniqueName == "pinyin") {
         // The plain pinyin entry has no shuangpin-specific options.
         config.showShuangpinMode.annotation().setHidden(true);
-        config.fuzzyConfig->partialSp.annotation().setHidden(true);
-        config.partialSpLength.annotation().setHidden(true);
     }
     // cannot use the lazy FCITX_ADDON_DEPENDENCY_LOADER accessor here because
     // this method is const.
@@ -1933,6 +1961,7 @@ void PinyinEngine::applyActiveEntryConfig(const InputMethodEntry &entry) {
 
 void PinyinEngine::setConfig(const RawConfig &config) {
     globalConfig_.load(config, true);
+    globalConfig_.abbreviationConfigMigrated.setValue(true);
     safeSaveAsIni(globalConfig_, "conf/pinyin.conf");
     // Existing per-IM overrides stay on disk; drop the caches so they are
     // re-seeded from the new global defaults and overlaid on next access.
@@ -1959,6 +1988,7 @@ void PinyinEngine::setConfigForInputMethod(const InputMethodEntry &entry,
 
     auto &imConfig = ensurePerImConfig(entry.uniqueName());
     imConfig.load(config, true);
+    imConfig.abbreviationConfigMigrated.setValue(true);
     safeSaveAsIni(imConfig, StandardPathsType::PkgConfig,
                   perImConfigPath(entry.uniqueName()));
 

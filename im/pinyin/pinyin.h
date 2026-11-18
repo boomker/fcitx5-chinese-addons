@@ -139,9 +139,6 @@ FCITX_CONFIGURATION(
     Option<bool> partialFinal{this, "PartialFinal",
                               _("Match partial finals (e -> en, eng, ei)"),
                               false};
-    OptionWithAnnotation<bool, OptionalHideInDescription> partialSp{
-        this, "PartialSp",
-        _("Match partial shuangpin if input length is longer than 4"), false};
     Option<bool> v{this, "V_U", _("u <-> v"), false};
     Option<bool> an{this, "AN_ANG", _("an <-> ang"), false};
     Option<bool> en{this, "EN_ENG", _("en <-> eng"), false};
@@ -162,6 +159,10 @@ FCITX_CONFIGURATION(
 
 FCITX_CONFIGURATION(
     PinyinEngineConfig,
+    HiddenOption<bool> compactTypoDefaultApplied{
+        this, "CompactTypoDefaultApplied", "", false};
+    HiddenOption<bool> abbreviationConfigMigrated{
+        this, "AbbreviationConfigMigrated", "", false};
     OptionWithAnnotation<
         ShuangpinProfileEnum,
         OptionalHideInDescriptionBase<ShuangpinProfileEnumI18NAnnotation>>
@@ -336,8 +337,8 @@ FCITX_CONFIGURATION(
         IntConstrain(0, 10)};
     Option<int, IntConstrain, DefaultMarshaller<int>, OptionalHideInDescription>
         partialSpLength{this, "PartialSpLength",
-                        _("Minimum length for abbreviated pinyin"), 4,
-                        IntConstrain(2, 4)};
+                        _("Minimum length for abbreviated pinyin"), 0,
+                        IntConstrain(0, 4)};
     ExternalOption dictmanager{this, "DictManager", _("Manage Dictionaries"),
                                "fcitx://config/addon/pinyin/dictmanager"};
     ExternalOption customphrase{this, "CustomPhrase", _("Manage Custom Phrase"),

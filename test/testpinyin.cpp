@@ -94,6 +94,11 @@ void setup(Instance *instance) {
         instance->globalConfig().load(hotkeys, true);
         auto *pinyin = instance->addonManager().addon("pinyin", true);
         FCITX_ASSERT(pinyin);
+        RawConfig pinyinDefaults;
+        pinyinDefaults.setValueByPath("PartialSpLength", "2");
+        pinyinDefaults.setValueByPath("Fuzzy/NG_GN", "True");
+        pinyinDefaults.setValueByPath("CompactTypoDefaultApplied", "True");
+        pinyin->setConfig(pinyinDefaults);
         auto defaultGroup = instance->inputMethodManager().currentGroup();
         defaultGroup.inputMethodList().clear();
         defaultGroup.inputMethodList().push_back(
@@ -293,6 +298,10 @@ void configureGroupedShuangpin(Instance *instance, InputContext *ic,
     config.setValueByPath("Prediction", "False");
     config.setValueByPath("PinyinInPreedit", "False");
     config.setValueByPath("PreeditMode", "Composing pinyin");
+    // Keep the historical threshold explicit; dedicated tests cover 0/2.
+    config.setValueByPath("PartialSpLength", "4");
+    config.setValueByPath("Fuzzy/NG_GN", "True");
+    config.setValueByPath("CompactTypoDefaultApplied", "True");
     // Keep Android's saved QWERTY preference enabled. Compact layouts must
     // suppress it at runtime without changing the 26-key preference.
     config.setValueByPath("Fuzzy/Correction", "QWERTY");
@@ -374,20 +383,20 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
         sendGroupedInput(frontend, ic, "gp");
         // With compact correction disabled, both decoded initials have exact
         // source spellings. Return commits those decoded ordinary keys.
-        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "g p")
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "f p")
             << ic->inputPanel().preedit().toString();
         FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 3)
             << ic->inputPanel().preedit().cursor();
-        frontend->call<ITestFrontend::pushCommitExpectation>("gp");
+        frontend->call<ITestFrontend::pushCommitExpectation>("fp");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
         // The automatic ch/c partner has no exact c source spelling on the IO
         // key. Confirm it so fallback rendering is independent of word ranking.
         sendGroupedInput(frontend, ic, "ip");
         confirmGroupedSyllable(ic, "c");
-        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "io p")
+        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "i p")
             << ic->inputPanel().preedit().toString();
-        FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 4)
+        FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 3)
             << ic->inputPanel().preedit().cursor();
         frontend->call<ITestFrontend::pushCommitExpectation>("ip");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
@@ -1257,9 +1266,9 @@ void testTwoKeyShuangpinBalance(Instance *instance) {
             config.setValueByPath("Prediction", "False");
             config.setValueByPath("PageSize", twoKeyAbbreviation ? "5" : "7");
             config.setValueByPath("PartialSpLength",
-                                  twoKeyAbbreviation ? "2" : "4");
-            config.setValueByPath("Fuzzy/PartialSp",
-                                  twoKeyAbbreviation ? "True" : "False");
+                                  twoKeyAbbreviation ? "2" : "0");
+            config.setValueByPath("Fuzzy/NG_GN", "True");
+            config.setValueByPath("CompactTypoDefaultApplied", "True");
             config.setValueByPath("Fuzzy/Correction", "QWERTY");
             instance->inputMethodEngine(ic)->setConfigForInputMethod(
                 *instance->inputMethodEntry(ic), config);
@@ -1525,6 +1534,13 @@ void testActionInStrokeFilter(Instance *instance) {
         auto *ic = instance->inputContextManager().findByUUID(uuid);
         FCITX_ASSERT(ic);
         instance->setCurrentInputMethod(ic, "pinyin", true);
+        RawConfig config;
+        config.setValueByPath("PartialSpLength", "3");
+        config.setValueByPath("Fuzzy/NG_GN", "True");
+        config.setValueByPath("CompactTypoDefaultApplied", "True");
+        instance->inputMethodEngine(ic)->setConfigForInputMethod(
+            *instance->inputMethodEntry(ic), config);
+        ic->reset();
 
         // Target ppp for 彡
         testfrontend->call<ITestFrontend::keyEvent>(uuid, Key("p"), false);
