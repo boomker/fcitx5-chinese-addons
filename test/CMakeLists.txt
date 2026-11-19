@@ -56,6 +56,10 @@ add_executable(testcandidatebalance testcandidatebalance.cpp ../im/pinyin/candid
 target_link_libraries(testcandidatebalance Fcitx5::Utils)
 add_test(NAME testcandidatebalance COMMAND testcandidatebalance)
 
+add_executable(testshuangpincandidate testshuangpincandidate.cpp ../im/pinyin/shuangpincandidate.cpp)
+target_link_libraries(testshuangpincandidate Fcitx5::Utils LibIME::Pinyin)
+add_test(NAME testshuangpincandidate COMMAND testshuangpincandidate)
+
 add_executable(testcustomphrase testcustomphrase.cpp ../im/pinyin/customphrase.cpp)
 target_compile_definitions(testcustomphrase PRIVATE "-DFCITX_CUSTOM_PHRASE_TEST")
 target_link_libraries(testcustomphrase Fcitx5::Utils LibIME::Core)
