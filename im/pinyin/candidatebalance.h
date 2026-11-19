@@ -38,9 +38,10 @@ enum class CandidateKind {
 
 struct CandidateInfo {
     CandidateKind kind = CandidateKind::LooseSingle;
-    // Number of non-symbol candidates that always follow this one.
+    // Number of extra candidates always listed after this one, including Lua
+    // results and symbols when folding is disabled.
     size_t attachedCount = 0;
-    // Whether symbol candidates such as emoji follow this one.
+    // Whether a foldable run of symbols such as emoji follows this one.
     bool hasSymbol = false;
 };
 

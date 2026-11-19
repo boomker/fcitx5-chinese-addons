@@ -1480,6 +1480,7 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         std::vector<CandidateInfo> infos;
         extras.reserve(candidates.size());
         infos.reserve(candidates.size());
+        const bool foldSymbolCandidates = *config_.foldSymbolCandidates;
         for (const auto &candidate : candidates) {
             const auto candidateString = candidate->text().toString();
             const auto &extra =
@@ -1488,7 +1489,12 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                 {candidateKind(*candidate, candidateString, pinyinCandidates,
                                pyBeforeCursor.size(), *ime_->model(),
                                isCommonEnglish),
-                 extra.lua.size(), extra.symbols && !extra.symbols->empty()});
+                 extra.lua.size() +
+                     (!foldSymbolCandidates && extra.symbols
+                          ? extra.symbols->size()
+                          : 0),
+                 foldSymbolCandidates && extra.symbols &&
+                     !extra.symbols->empty()});
         }
         // The front page is what a user sees without paging or expanding.
         constexpr size_t minFrontSize = 5;
@@ -2026,6 +2032,9 @@ void PinyinEngine::applyImeRuntime() {
     if (*config_.partialSpLength > 0) {
         flags |= libime::PinyinFuzzyFlag::PartialSp;
     }
+    if (!*config_.shuangpinInitialFuzzy) {
+        flags |= libime::PinyinFuzzyFlag::DisableShuangpinInitialFuzzy;
+    }
     SET_FUZZY_FLAG(v, V_U)
     SET_FUZZY_FLAG(an, AN_ANG)
     SET_FUZZY_FLAG(en, EN_ENG)
@@ -2206,6 +2215,7 @@ PinyinEngine::ensurePerImConfig(const std::string &uniqueName) const {
     if (uniqueName == "pinyin") {
         // The plain pinyin entry has no shuangpin-specific options.
         config.showShuangpinMode.annotation().setHidden(true);
+        config.shuangpinInitialFuzzy.annotation().setHidden(true);
     }
     // cannot use the lazy FCITX_ADDON_DEPENDENCY_LOADER accessor here because
     // this method is const.

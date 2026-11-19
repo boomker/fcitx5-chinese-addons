@@ -177,6 +177,8 @@ FCITX_CONFIGURATION(
                               _("Show English Candidates"), true};
     Option<bool> symbolsEnabled{this, "SymbolsEnabled",
                                 _("Show symbol candidates"), true};
+    Option<bool> foldSymbolCandidates{this, "FoldSymbolCandidates",
+                                      _("Fold emoji"), false};
     Option<bool> chaiziEnabled{this, "ChaiziEnabled",
                                _("Show Chaizi candidates"), true};
     Option<bool> extBEnabled{
@@ -340,6 +342,9 @@ FCITX_CONFIGURATION(
         partialSpLength{this, "PartialSpLength",
                         _("Minimum length for abbreviated pinyin"), 0,
                         IntConstrain(0, 4)};
+    OptionWithAnnotation<bool, OptionalHideInDescription>
+        shuangpinInitialFuzzy{this, "ShuangpinInitialFuzzy",
+                              _("Fuzzy abbreviations"), false};
     ExternalOption dictmanager{this, "DictManager", _("Manage Dictionaries"),
                                "fcitx://config/addon/pinyin/dictmanager"};
     ExternalOption customphrase{this, "CustomPhrase", _("Manage Custom Phrase"),
