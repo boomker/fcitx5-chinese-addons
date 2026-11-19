@@ -3447,8 +3447,15 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
             event.filterAndAccept();
         } else if (event.key().checkKeyList(*config_.commitRawInput)) {
             // Key normalization can remove Shift from keypad Enter.
-            inputContext->commitString(preeditCommitString(
-                inputContext, event.origKey().states().test(KeyState::Shift)));
+            const auto originalKey = event.origKey();
+            const bool plainEnter = originalKey.check(FcitxKey_Return) ||
+                                    originalKey.check(FcitxKey_KP_Enter);
+            if (plainEnter && !state->compactLayout_ && !state->groupedInput_) {
+                inputContext->commitString(preeditCommitString(inputContext));
+            } else {
+                inputContext->commitString(preeditCommitString(
+                    inputContext, originalKey.states().test(KeyState::Shift)));
+            }
             state->context_.clear();
             state->context_.clearContextWords();
             event.filterAndAccept();

@@ -437,20 +437,24 @@ void testShuangpinEncodingCommit(Instance *instance) {
                         uuid, Key(std::string(key)), false);
                     FCITX_ASSERT(ic->inputPanel().clientPreedit().empty());
                 };
+                const auto displayedSuffix = fullPinyin ? "hao" : "hc";
                 for (const auto key :
                      {"Return", "KP_Enter", "Shift+Return", "Shift+KP_Enter"}) {
                     const bool separated =
                         std::string_view(key).starts_with("Shift");
+                    const auto suffix =
+                        compact || separated ? displayedSuffix : "hc";
                     type("nihc");
-                    commit(key, fullPinyin ? (separated ? "ni hao" : "nihao")
-                                           : (separated ? "ni hc" : "nihc"));
+                    commit(key, std::string(separated ? "ni " : "ni") + suffix);
                     type("ni'hc");
-                    commit(key, fullPinyin ? (separated ? "ni'hao" : "nihao")
-                                           : (separated ? "ni'hc" : "nihc"));
+                    commit(key,
+                           std::string(!compact || separated ? "ni'" : "ni") +
+                               suffix);
                 }
                 type("ni'hc");
                 findAndSelectCandidate(ic, "你");
-                commit("Return", fullPinyin ? "你hao" : "你hc");
+                commit("Return",
+                       compact ? std::string("你") + displayedSuffix : "你'hc");
                 type("ni'hc");
                 findAndSelectCandidate(ic, "你");
                 commit("Shift+Return", fullPinyin ? "你'hao" : "你'hc");
