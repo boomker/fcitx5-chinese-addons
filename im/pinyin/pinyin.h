@@ -8,6 +8,7 @@
 #define _PINYIN_PINYIN_H_
 
 #include "customphrase.h"
+#include "shuangpincandidate.h"
 #include "symboldictionary.h"
 #include "workerthread.h"
 #include <cstddef>
@@ -405,6 +406,16 @@ public:
     bool compactLayout_ = false;
     bool lastIsPunc_ = false;
 
+    struct ShuangpinSelection {
+        std::string scope;
+        std::string input;
+        std::string prefix;
+        std::string word;
+        size_t selectedLength;
+        bool correction;
+    };
+    std::optional<ShuangpinSelection> pendingShuangpinSelection_;
+
     PinyinMode mode_ = PinyinMode::Normal;
 
     // Forget candidate
@@ -462,6 +473,13 @@ public:
 
     void updateUI(InputContext *inputContext);
     void updateFilter(InputContext *inputContext);
+    void prepareShuangpinSelection(InputContext *inputContext,
+                                   size_t selectLength, std::string word,
+                                   bool correction = false);
+    void
+    forgetShuangpinSelection(InputContext *inputContext,
+                             const std::string &word,
+                             std::optional<bool> isOnFirstPage = std::nullopt);
 
     void resetForgetCandidate(InputContext *inputContext) const;
     void forgetCandidate(InputContext *inputContext, size_t index);
@@ -568,6 +586,8 @@ private:
     mutable std::unordered_map<std::string, std::unique_ptr<PinyinEngineConfig>>
         perImConfigs_;
     std::unique_ptr<libime::PinyinIME> ime_;
+    libime::HistoryBigram shuangpinHistory_;
+    ShuangpinCorrectionPlacements shuangpinPlacements_;
     std::vector<std::regex> quickphraseTriggerRegex_;
     KeyList selectionKeys_;
     KeyList numpadSelectionKeys_;

@@ -98,6 +98,11 @@ std::vector<CandidatePlacement>
 arrangeCandidates(std::span<const CandidateInfo> candidates,
                   size_t frontSize = 5);
 
+// Personal preference already determined the order; only apply symbol folding.
+std::vector<CandidatePlacement>
+placeCandidatesInOrder(std::span<const CandidateInfo> candidates,
+                       size_t frontSize = 5);
+
 // Whether word is an everyday English word of two to four letters.
 bool isCommonShortEnglishWord(std::string_view word);
 

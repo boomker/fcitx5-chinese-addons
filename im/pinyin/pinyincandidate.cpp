@@ -213,6 +213,8 @@ CustomPhraseCandidateWord::CustomPhraseCandidateWord(
 void CustomPhraseCandidateWord::select(InputContext *inputContext) const {
     auto *state = inputContext->propertyFor(&engine_->factory());
     auto &context = state->context_;
+    engine_->prepareShuangpinSelection(inputContext, selectLength_,
+                                       text().toString());
     context.selectCustom(selectLength_, text().toString());
     engine_->updateUI(inputContext);
 }
@@ -318,6 +320,7 @@ SpellCandidateWord::SpellCandidateWord(PinyinEngine *engine, std::string word,
 void SpellCandidateWord::select(InputContext *inputContext) const {
     auto *state = inputContext->propertyFor(&engine_->factory());
     auto &context = state->context_;
+    engine_->prepareShuangpinSelection(inputContext, selectLength_, word_);
     context.selectCustom(selectLength_, word_);
     engine_->updateUI(inputContext);
 }
@@ -340,6 +343,15 @@ void PinyinCandidateWord::select(InputContext *inputContext) const {
     if (idx_ >= context.candidatesToCursor().size()) {
         return;
     }
+    const auto word = text().toString();
+    const auto &sentence = context.candidatesToCursor()[idx_].sentence();
+    const bool correction =
+        utf8::length(word) == 1 &&
+        std::ranges::any_of(sentence, [](const libime::LatticeNode *node) {
+            return node->as<libime::PinyinLatticeNode>().isCorrection();
+        });
+    engine_->prepareShuangpinSelection(inputContext, selectLength_, word,
+                                       correction);
     context.selectCandidatesToCursor(idx_);
     engine_->updateUI(inputContext);
 }
@@ -449,7 +461,7 @@ PinyinActionableCandidateList::PinyinActionableCandidateList(
 
 bool PinyinActionableCandidateList::hasAction(
     const CandidateWord &candidate) const {
-    return isPinyinCandidate(candidate) ||
+    return isPinyinCandidate(candidate) || isShuangpinCorrection(candidate) ||
            canBeInsertedAsCustomPhrase(candidate) ||
            foldedSymbolCandidate(candidate);
 }
@@ -469,7 +481,7 @@ std::vector<CandidateAction> PinyinActionableCandidateList::candidateActions(
         }
         return result;
     }
-    if (isPinyinCandidate(candidate)) {
+    if (isPinyinCandidate(candidate) || isShuangpinCorrection(candidate)) {
         CandidateAction action;
         action.setId(PINYIN_FORGET);
         action.setText(_("Forget candidate"));
@@ -503,12 +515,22 @@ std::vector<CandidateAction> PinyinActionableCandidateList::candidateActions(
 
 void PinyinActionableCandidateList::triggerAction(
     const CandidateWord &candidate, int id) {
+    triggerAction(candidate, id, {});
+}
+
+void PinyinActionableCandidateList::triggerAction(
+    const CandidateWord &candidate, int id,
+    const CandidateActionContext &context) {
     switch (id) {
     case PINYIN_FORGET: {
         if (const auto *pinyinCandidate =
                 dynamic_cast<const PinyinCandidateWord *>(&candidate)) {
             engine_->forgetCandidate(inputContext_,
                                      pinyinCandidate->candidateIndex());
+        } else if (isShuangpinCorrection(candidate)) {
+            engine_->forgetShuangpinSelection(inputContext_,
+                                              candidate.text().toString(),
+                                              context.isOnFirstPage);
         }
     } break;
     case PINYIN_CUSTOMPHRASE: {
@@ -585,7 +607,7 @@ void PinyinTabbedCandidateList::buildTabActions() {
 
     PinyinCache cache;
 
-    if (state->groupedInput_) {
+    if (context.useShuangpin()) {
         syllableFrom_ = context.nextSyllableOffset();
         syllableTo_ = syllableFrom_;
         while (syllableTo_ < fullInput.size() &&
@@ -593,15 +615,26 @@ void PinyinTabbedCandidateList::buildTabActions() {
                fullInput[syllableTo_] != '\'') {
             ++syllableTo_;
         }
+        auto flags = context.fuzzyFlags();
         auto matches =
             libime::PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
                 fullInput.substr(syllableFrom_, syllableTo_ - syllableFrom_),
-                *context.shuangpinProfile(), context.fuzzyFlags());
-        if (syllableTo_ - syllableFrom_ == 2 &&
-            std::ranges::none_of(matches, [](const auto &match) {
+                *context.shuangpinProfile(),
+                flags.unset(libime::PinyinFuzzyFlag::Correction));
+        const auto hasSyllable = [](const auto &matches) {
+            return std::ranges::any_of(matches, [](const auto &match) {
                 return match.first != libime::PinyinInitial::Invalid &&
                        !match.second.empty();
-            })) {
+            });
+        };
+        if (!hasSyllable(matches) &&
+            flags.test(libime::PinyinFuzzyFlag::Correction)) {
+            // Ordinary pairs should not be crowded by their typo variants.
+            matches = libime::PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
+                fullInput.substr(syllableFrom_, syllableTo_ - syllableFrom_),
+                *context.shuangpinProfile(), flags);
+        }
+        if (syllableTo_ - syllableFrom_ == 2 && !hasSyllable(matches)) {
             // Match the parser's single-key fallback for an invalid pair.
             syllableTo_ = syllableFrom_ + 1;
             matches = libime::PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
@@ -801,7 +834,7 @@ void PinyinTabbedCandidateList::triggerMainAction(int id) {
         return;
     }
     auto *state = inputContext_->propertyFor(&engine_->factory());
-    if (state->groupedInput_ && id >= 0) {
+    if (state->context_.useShuangpin() && id >= 0) {
         if (static_cast<size_t>(id) < syllableActions_.size() &&
             state->context_.selectSyllable(syllableFrom_, syllableTo_,
                                            syllableActions_[id])) {

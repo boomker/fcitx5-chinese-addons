@@ -270,6 +270,18 @@ balanceTwoKeyCandidates(std::span<const CandidateInfo> candidates,
 }
 
 std::vector<CandidatePlacement>
+placeCandidatesInOrder(std::span<const CandidateInfo> candidates,
+                       size_t frontSize) {
+    FrontPage front(frontSize);
+    std::vector<CandidatePlacement> result;
+    result.reserve(candidates.size());
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        result.push_back(front.place(i, candidates[i]));
+    }
+    return result;
+}
+
+std::vector<CandidatePlacement>
 arrangeCandidates(std::span<const CandidateInfo> candidates, size_t frontSize) {
     std::vector<CandidatePlacement> result;
     result.reserve(candidates.size());

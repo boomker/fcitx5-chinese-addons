@@ -80,6 +80,7 @@ public:
     size_t selectLength() const { return selectLength_; }
     virtual bool isPinyinCandidate() const { return false; }
     virtual bool isCustomPhrase() const { return false; }
+    virtual bool isShuangpinCorrection() const { return false; }
 
     void setSortOrder(CandidateOrder order) { order_ = order; }
 
@@ -267,7 +268,7 @@ private:
     static constexpr uint64_t TickPeriod = 180000;
 };
 
-class PinyinActionableCandidateList : public ActionableCandidateList {
+class PinyinActionableCandidateList : public ContextualActionableCandidateList {
 public:
     PinyinActionableCandidateList(PinyinEngine *engine,
                                   InputContext *inputContext);
@@ -278,10 +279,17 @@ public:
     candidateActions(const CandidateWord &candidate) const override;
 
     void triggerAction(const CandidateWord &candidate, int id) override;
+    void triggerAction(const CandidateWord &candidate, int id,
+                       const CandidateActionContext &context) override;
 
 private:
     static bool isPinyinCandidate(const CandidateWord &candidate) {
         return dynamic_cast<const PinyinCandidateWord *>(&candidate);
+    }
+    static bool isShuangpinCorrection(const CandidateWord &candidate) {
+        const auto *pinyin =
+            dynamic_cast<const PinyinAbstractCandidateWord *>(&candidate);
+        return pinyin && pinyin->isShuangpinCorrection();
     }
 
     static bool canBeInsertedAsCustomPhrase(const CandidateWord &candidate) {
