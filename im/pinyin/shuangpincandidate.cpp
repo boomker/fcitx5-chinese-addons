@@ -28,6 +28,9 @@ constexpr float ContextProbabilityWeight = 0.5F;
 constexpr float MaximumContextLogBoost = 2.0F;
 constexpr float MaximumAlternativeLogGap = 1.0F;
 constexpr float MinimumAlternativeContextLift = 0.15F;
+constexpr int32_t CorrectionLearningGraceCount = 2;
+constexpr float HistoryLogBoostPerDoubling = 0.25F;
+constexpr float MaximumHistoryLogBoost = 1.0F;
 
 struct ScoredCorrection {
     ShuangpinCorrection correction;
@@ -61,9 +64,25 @@ float contextualMixture(float unigram, float contextual) {
                                     std::pow(10.0F, contextual - largest));
 }
 
+float correctionLearningStrength(int32_t selections) {
+    // A few accidental selections should not turn a typo into a new spelling.
+    const auto confirmed = std::max(selections, CorrectionLearningGraceCount) -
+                           CorrectionLearningGraceCount;
+    return std::log2(1.0F + static_cast<float>(confirmed));
+}
+
+float learnedCorrectionScore(const ScoredCorrection &candidate) {
+    return candidate.combined +
+           std::min(MaximumHistoryLogBoost,
+                    HistoryLogBoostPerDoubling *
+                        correctionLearningStrength(candidate.selections));
+}
+
 bool betterCorrection(const ScoredCorrection &a, const ScoredCorrection &b) {
-    if (a.selections != b.selections) {
-        return a.selections > b.selections;
+    const auto aScore = learnedCorrectionScore(a);
+    const auto bScore = learnedCorrectionScore(b);
+    if (aScore != bScore) {
+        return aScore > bScore;
     }
     if (a.combined != b.combined) {
         return a.combined > b.combined;
@@ -155,7 +174,8 @@ void learnShuangpinSelection(libime::HistoryBigram &history,
 std::vector<size_t>
 rankShuangpinCandidates(std::span<const std::string_view> words,
                         const libime::HistoryBigram &history,
-                        std::string_view scope) {
+                        std::string_view scope,
+                        std::optional<size_t> correctionIndex) {
     std::vector<size_t> order(words.size());
     std::iota(order.begin(), order.end(), size_t{0});
     std::vector<int32_t> counts;
@@ -164,6 +184,21 @@ rankShuangpinCandidates(std::span<const std::string_view> words,
     }
     std::stable_sort(order.begin(), order.end(),
                      [&](size_t a, size_t b) { return counts[a] > counts[b]; });
+    if (correctionIndex && *correctionIndex < words.size() &&
+        words.size() > 1) {
+        // Keep ordinary preferences, but let a correction advance only
+        // gradually from its fallback slot, leaving the first ordinary
+        // candidate in front.
+        const auto promotion = static_cast<size_t>(
+            correctionLearningStrength(counts[*correctionIndex]));
+        const auto earliest = std::max<size_t>(
+            1, *correctionIndex - std::min(*correctionIndex, promotion));
+        const auto correction = std::ranges::find(order, *correctionIndex);
+        const auto firstAllowed = order.begin() + earliest;
+        if (correction < firstAllowed) {
+            std::rotate(correction, correction + 1, firstAllowed + 1);
+        }
+    }
     return order;
 }
 

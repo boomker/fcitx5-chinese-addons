@@ -51,11 +51,14 @@ bool hasShuangpinSelections(const libime::HistoryBigram &history,
 void learnShuangpinSelection(libime::HistoryBigram &history,
                              std::string_view scope, std::string_view word);
 // Stable ties preserve the supplied engine order, including the initial
-// fallback slot.
+// fallback slot. An optional correction index refers to words, not display
+// slots: its first two selections add no promotion, later selections advance
+// gradually while retaining an ordinary candidate ahead of the correction.
 std::vector<size_t>
 rankShuangpinCandidates(std::span<const std::string_view> words,
                         const libime::HistoryBigram &history,
-                        std::string_view scope);
+                        std::string_view scope,
+                        std::optional<size_t> correctionIndex = std::nullopt);
 
 // At most three distinct neighboring-key corrections. The first is the scoped
 // personal/contextual choice; other entries preserve useful static-frequency

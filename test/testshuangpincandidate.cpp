@@ -231,6 +231,102 @@ void testAdaptiveCandidateOrder() {
                  initial);
 }
 
+void testCorrectionPromotionIsGradual() {
+    const std::vector<std::string_view> words{"词一", "词二", "词三", "词四",
+                                              "纠错", "词五", "词六"};
+    const std::vector<size_t> initial{0, 1, 2, 3, 4, 5, 6};
+    const std::string scope = "v1:test:fm";
+    HistoryBigram history;
+    FCITX_ASSERT(rankShuangpinCandidates(words, history, scope, 4) == initial);
+    for (int i = 0; i < 2; ++i) {
+        learnShuangpinSelection(history, scope, "纠错");
+        FCITX_ASSERT(rankShuangpinCandidates(words, history, scope, 4) ==
+                     initial);
+    }
+    learnShuangpinSelection(history, scope, "纠错");
+    FCITX_ASSERT((rankShuangpinCandidates(words, history, scope, 4) ==
+                  std::vector<size_t>{0, 1, 2, 4, 3, 5, 6}));
+    for (int i = 0; i < 2; ++i)
+        learnShuangpinSelection(history, scope, "纠错");
+    FCITX_ASSERT((rankShuangpinCandidates(words, history, scope, 4) ==
+                  std::vector<size_t>{0, 1, 4, 2, 3, 5, 6}));
+    for (int i = 0; i < 4; ++i)
+        learnShuangpinSelection(history, scope, "纠错");
+    FCITX_ASSERT((rankShuangpinCandidates(words, history, scope, 4) ==
+                  std::vector<size_t>{0, 4, 1, 2, 3, 5, 6}));
+    for (int i = 0; i < 512; ++i)
+        learnShuangpinSelection(history, scope, "纠错");
+    FCITX_ASSERT((rankShuangpinCandidates(words, history, scope, 4) ==
+                  std::vector<size_t>{0, 4, 1, 2, 3, 5, 6}));
+}
+
+void testCorrectionCanFollowLearnedOrdinaryCandidates() {
+    const std::vector<std::string_view> words{"词一", "词二", "词三", "词四",
+                                              "纠错", "词五", "词六"};
+    const std::string scope = "v1:test:fm";
+    HistoryBigram history;
+    for (int i = 0; i < 2; ++i)
+        learnShuangpinSelection(history, scope, "纠错");
+    for (const auto word : {"词一", "词二", "词三", "词四", "词五", "词六"}) {
+        for (int i = 0; i < 3; ++i)
+            learnShuangpinSelection(history, scope, word);
+    }
+    FCITX_ASSERT((rankShuangpinCandidates(words, history, scope, 4) ==
+                  std::vector<size_t>{0, 1, 2, 3, 5, 6, 4}));
+}
+
+void testCorrectionRankingBoundaries() {
+    const std::string scope = "v1:test:fm";
+    HistoryBigram history;
+    for (int i = 0; i < 512; ++i)
+        learnShuangpinSelection(history, scope, "纠错");
+    const std::vector<std::string_view> empty;
+    FCITX_ASSERT(rankShuangpinCandidates(empty, history, scope, 0).empty());
+    const std::vector<std::string_view> onlyCorrection{"纠错"};
+    FCITX_ASSERT((rankShuangpinCandidates(onlyCorrection, history, scope, 0) ==
+                  std::vector<size_t>{0}));
+    const std::vector<std::string_view> lastCorrection{"合法", "纠错"};
+    FCITX_ASSERT((rankShuangpinCandidates(lastCorrection, history, scope, 1) ==
+                  std::vector<size_t>{0, 1}));
+    const std::vector<std::string_view> firstCorrection{"纠错", "合法"};
+    FCITX_ASSERT((rankShuangpinCandidates(firstCorrection, history, scope, 0) ==
+                  std::vector<size_t>{1, 0}));
+}
+
+void testCorrectionRankingPersistsAndStaysScoped() {
+    const ShuangpinProfile xiaohe(ShuangpinBuiltinProfile::Xiaohe);
+    const ShuangpinProfile microsoft(ShuangpinBuiltinProfile::MS);
+    const auto scope = shuangpinSelectionScope(xiaohe, "fm");
+    const std::vector<std::string_view> words{"词一", "词二", "词三",
+                                              "词四", "纠错", "词五"};
+    const std::vector<size_t> initial{0, 1, 2, 3, 4, 5};
+    HistoryBigram history;
+    for (int i = 0; i < 2; ++i)
+        learnShuangpinSelection(history, scope, "纠错");
+    std::stringstream saved;
+    history.save(saved);
+    HistoryBigram restored;
+    restored.load(saved);
+    FCITX_ASSERT(rankShuangpinCandidates(words, restored, scope, 4) == initial);
+    learnShuangpinSelection(restored, scope, "纠错");
+    const auto promoted = rankShuangpinCandidates(words, restored, scope, 4);
+    FCITX_ASSERT((promoted == std::vector<size_t>{0, 1, 2, 4, 3, 5}));
+    FCITX_ASSERT(rankShuangpinCandidates(words, restored,
+                                         shuangpinSelectionScope(xiaohe, "wm"),
+                                         4) == initial);
+    FCITX_ASSERT(rankShuangpinCandidates(
+                     words, restored, shuangpinSelectionScope(microsoft, "fm"),
+                     4) == initial);
+    std::stringstream savedPromoted;
+    restored.save(savedPromoted);
+    HistoryBigram reloaded;
+    reloaded.load(savedPromoted);
+    FCITX_ASSERT(rankShuangpinCandidates(words, reloaded, scope, 4) ==
+                 promoted);
+    reloaded.forget("纠错", scope);
+    FCITX_ASSERT(rankShuangpinCandidates(words, reloaded, scope, 4) == initial);
+}
+
 void testCorrectionUsesScopedChoicesInsteadOfGlobalHistory() {
     PinyinIME ime(std::make_unique<PinyinDictionary>(),
                   std::make_unique<UserLanguageModel>());
@@ -250,6 +346,10 @@ void testCorrectionUsesScopedChoicesInsteadOfGlobalHistory() {
     FCITX_ASSERT(shuangpinCorrection(context)->word == "点");
     HistoryBigram scoped;
     const auto scope = shuangpinSelectionScope(*ime.shuangpinProfile(), "fm");
+    for (int i = 0; i < 2; ++i) {
+        learnShuangpinSelection(scoped, scope, "电");
+        FCITX_ASSERT(shuangpinCorrection(context, &scoped)->word == "点");
+    }
     learnShuangpinSelection(scoped, scope, "电");
     FCITX_ASSERT(shuangpinCorrection(context, &scoped)->word == "电");
     learnShuangpinSelection(
@@ -421,13 +521,43 @@ void testContextDoesNotUseGlobalPersonalHistory() {
     FCITX_ASSERT(ime->model()->history().rawUnigramFrequency({"点", ""}) == 20);
     HistoryBigram scoped;
     const auto scope = shuangpinSelectionScope(*ime->shuangpinProfile(), "fm");
-    learnShuangpinSelection(scoped, scope, "点");
+    for (int i = 0; i < 2; ++i) {
+        learnShuangpinSelection(scoped, scope, "点");
+        FCITX_ASSERT(shuangpinCorrection(context, &scoped)->word == "电");
+    }
+    for (int i = 2; i < 17; ++i)
+        learnShuangpinSelection(scoped, scope, "点");
     FCITX_ASSERT(shuangpinCorrection(context, &scoped)->word == "点");
     HistoryBigram otherCode;
     learnShuangpinSelection(
         otherCode, shuangpinSelectionScope(*ime->shuangpinProfile(), "wm"),
         "点");
     FCITX_ASSERT(shuangpinCorrection(context, &otherCode)->word == "电");
+}
+
+void testCorrectionHistoryBoostIsBounded() {
+    ContextModelFile file;
+    auto ime = makeContextIME(file);
+    PinyinContext context(ime.get());
+    context.setUseShuangpin(true);
+    context.type("fm");
+    const auto scope = shuangpinSelectionScope(*ime->shuangpinProfile(), "fm");
+    HistoryBigram lowerFrequency;
+    HistoryBigram rare;
+    for (int i = 0; i < 512; ++i) {
+        learnShuangpinSelection(lowerFrequency, scope, "典");
+        learnShuangpinSelection(rare, scope, "殿");
+    }
+    // An uncapped logarithmic bonus would overcome the two-log prior gap.
+    FCITX_ASSERT(shuangpinCorrection(context, &lowerFrequency)->word == "点");
+    FCITX_ASSERT(shuangpinCorrection(context, &rare)->word == "点");
+    context.setContextWords({"开"});
+    const auto corrections = shuangpinCorrections(context, &rare);
+    FCITX_ASSERT(!corrections.empty());
+    FCITX_ASSERT(corrections.front().word == "电");
+    FCITX_ASSERT(std::ranges::none_of(corrections, [](const auto &candidate) {
+        return candidate.word == "殿";
+    }));
 }
 
 void testCorrectionPoolIsDistinctBoundedAndKeepsPinyinBinding() {
@@ -486,6 +616,10 @@ int main() {
     testRareInitialWords();
     testSelectionScopeAndPersistence();
     testAdaptiveCandidateOrder();
+    testCorrectionPromotionIsGradual();
+    testCorrectionCanFollowLearnedOrdinaryCandidates();
+    testCorrectionRankingBoundaries();
+    testCorrectionRankingPersistsAndStaysScoped();
     testCorrectionUsesScopedChoicesInsteadOfGlobalHistory();
     testTwoStageManualReset();
     testResetWithoutCorrectionLearningDefersImmediately();
@@ -493,5 +627,6 @@ int main() {
     testContextualCorrectionRetainsFrequencyFallback();
     testContextFallbackAndSelectedPrefix();
     testContextDoesNotUseGlobalPersonalHistory();
+    testCorrectionHistoryBoostIsBounded();
     testCorrectionPoolIsDistinctBoundedAndKeepsPinyinBinding();
 }

@@ -1542,6 +1542,7 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             std::vector<size_t> movableSlots;
             std::vector<size_t> movableIndices;
             std::vector<std::string> words;
+            std::optional<size_t> movableCorrectionIndex;
             for (size_t i = 0; i < base.size(); ++i) {
                 const auto index = base[i];
                 if ((candidates[index]->isPinyinCandidate() &&
@@ -1549,12 +1550,15 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                     (learnedCorrection && index == correctionIndex)) {
                     movableSlots.push_back(i);
                     movableIndices.push_back(index);
+                    if (learnedCorrection && index == correctionIndex) {
+                        movableCorrectionIndex = words.size();
+                    }
                     words.push_back(candidates[index]->text().toString());
                 }
             }
             std::vector<std::string_view> views(words.begin(), words.end());
-            const auto order =
-                rankShuangpinCandidates(views, shuangpinHistory_, scope);
+            const auto order = rankShuangpinCandidates(
+                views, shuangpinHistory_, scope, movableCorrectionIndex);
             for (size_t i = 0; i < order.size(); ++i) {
                 base[movableSlots[i]] = movableIndices[order[i]];
             }
