@@ -489,6 +489,14 @@ msgstr ""
 msgid "Commit preview"
 msgstr ""
 
+#: im/pinyin/pinyin.h:116
+msgid "Only rare characters"
+msgstr ""
+
+#: im/pinyin/pinyin.h:116
+msgid "Always show"
+msgstr ""
+
 #: im/pinyin/pinyin.h:118
 msgid "Only Clear candidates"
 msgstr ""
@@ -644,6 +652,10 @@ msgstr ""
 
 #: im/pinyin/pinyin.h:205
 msgid "Preedit Mode"
+msgstr ""
+
+#: im/pinyin/pinyin.h:218
+msgid "Pinyin Annotation"
 msgstr ""
 
 #: im/pinyin/pinyin.h:212

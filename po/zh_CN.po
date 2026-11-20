@@ -519,6 +519,14 @@ msgstr "拼音串"
 msgid "Commit preview"
 msgstr "提交预览"
 
+#: im/pinyin/pinyin.h
+msgid "Only rare characters"
+msgstr "仅生僻字"
+
+#: im/pinyin/pinyin.h
+msgid "Always show"
+msgstr "始终标注"
+
 #: im/pinyin/pinyin.h:118
 msgid "Only Clear candidates"
 msgstr "仅清空候选词"
@@ -675,6 +683,10 @@ msgstr "总是显示云拼音的占位符"
 #: im/pinyin/pinyin.h:205
 msgid "Preedit Mode"
 msgstr "预编辑模式"
+
+#: im/pinyin/pinyin.h
+msgid "Pinyin Annotation"
+msgstr "拼音标注"
 
 #: im/pinyin/pinyin.h:212
 msgid "Show complete pinyin in preedit"

@@ -418,10 +418,12 @@ public:
           inputContext_(inputContext), correction_(std::move(correction)),
           input_(std::move(input)) {
         setText(Text(correction_.word));
-        setComment(Text(
-            "(" +
-            libime::PinyinEncoder::decodeFullPinyin(correction_.encodedPinyin) +
-            ")"));
+        if (engine_->shouldShowPinyinAnnotation(correction_.word)) {
+            setComment(Text("(" +
+                            libime::PinyinEncoder::decodeFullPinyin(
+                                correction_.encodedPinyin) +
+                            ")"));
+        }
         setFallback(initialPlacement);
         setDeferredFallback(deferredPlacement);
     }
@@ -1069,6 +1071,21 @@ void PinyinEngine::forgetShuangpinSelection(InputContext *inputContext,
     }
 }
 
+bool PinyinEngine::shouldShowPinyinAnnotation(
+    std::string_view candidate) const {
+    switch (*config_.pinyinAnnotation) {
+    case PinyinAnnotation::None:
+        return false;
+    case PinyinAnnotation::Rare:
+        return utf8::length(candidate) == 1 &&
+               ime_->model()->isUnknown(ime_->model()->index(candidate),
+                                        candidate);
+    case PinyinAnnotation::Always:
+        return true;
+    }
+    return false;
+}
+
 void PinyinEngine::updateUI(InputContext *inputContext) {
     auto *state = inputContext->propertyFor(&factory_);
     inputContext->inputPanel().reset();
@@ -1295,9 +1312,6 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
 
         // Save the middle point for inplace_merge.
         std::vector<std::unique_ptr<PinyinAbstractCandidateWord>> candidates;
-        std::unordered_map<std::string, std::vector<PinyinCandidateWord *>>
-            candidateSet;
-
         candidates.reserve(customCandidateMap.size() + pinyinCandidates.size());
         // Reserve the space for custom candidate and start to lay them out.
         candidates.resize(customCandidateMap.size());
@@ -1358,8 +1372,7 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             auto pinyinCandidate = std::make_unique<PinyinCandidateWord>(
                 this, inputContext, Text(std::move(candidateString)),
                 candidate.sentence().back()->to()->index(), idx, order);
-            candidateSet[pinyinCandidate->text().toString()].push_back(
-                pinyinCandidate.get());
+            pinyinCandidate->setPinyinInComment();
             if (iter != customCandidateMap.end()) {
                 if (dynamic_cast<CustomPhraseCandidateWord *>(
                         iter->second.get())) {
@@ -1368,11 +1381,6 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                 iter->second = std::move(pinyinCandidate);
             } else {
                 candidates.push_back(std::move(pinyinCandidate));
-            }
-        }
-        for (const auto &[_, candidates] : candidateSet) {
-            for (auto *candidate : candidates | std::views::drop(1)) {
-                candidate->setPinyinInComment();
             }
         }
         // Put the custom candidate in the first half.

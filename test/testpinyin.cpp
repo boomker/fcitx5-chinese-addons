@@ -1530,6 +1530,67 @@ void testForget(Instance *instance) {
     });
 }
 
+void testPinyinAnnotation(Instance *instance) {
+    instance->eventDispatcher().schedule([instance]() {
+        auto *frontend = instance->addonManager().addon("testfrontend");
+        const auto uuid = frontend->call<ITestFrontend::createInputContext>(
+            "pinyin-annotation");
+        auto *ic = instance->inputContextManager().findByUUID(uuid);
+        FCITX_ASSERT(ic);
+        instance->setCurrentInputMethod(ic, "pinyin", true);
+        auto *engine = instance->inputMethodEngine(ic);
+        const auto *entry = instance->inputMethodEntry(ic);
+        FCITX_ASSERT(engine && entry);
+
+        const auto setMode = [&](std::string_view mode) {
+            RawConfig config;
+            config.setValueByPath("PinyinAnnotation", std::string(mode));
+            engine->setConfigForInputMethod(*entry, config);
+            ic->reset();
+        };
+        const auto type = [&](std::string_view input) {
+            for (const char chr : input) {
+                frontend->call<ITestFrontend::keyEvent>(
+                    uuid, Key(static_cast<KeySym>(chr)), false);
+            }
+        };
+        const auto commentFor = [&](std::string_view word) {
+            const auto index = findCandidateOrDie(ic, word);
+            return ic->inputPanel()
+                .candidateList()
+                ->toBulk()
+                ->candidateFromAll(index)
+                .comment()
+                .toString();
+        };
+
+        setMode("Always show");
+        type("nihao");
+        FCITX_ASSERT(commentFor("你好") == "(ni'hao)");
+
+        setMode("Do not show");
+        type("nihao");
+        FCITX_ASSERT(commentFor("你好").empty());
+
+        setMode("Only rare characters");
+        type("nihao");
+        FCITX_ASSERT(commentFor("你好").empty());
+
+        setMode("Always show");
+        type("ppp");
+        FCITX_ASSERT(!commentFor("彡").empty());
+
+        setMode("Do not show");
+        type("ppp");
+        FCITX_ASSERT(commentFor("彡").empty());
+
+        setMode("Only rare characters");
+        ic->reset();
+        type("pi");
+        FCITX_ASSERT(commentFor("䫠") == "(pi)");
+    });
+}
+
 void testActionInStrokeFilter(Instance *instance) {
     instance->eventDispatcher().schedule([instance]() {
         auto *testfrontend = instance->addonManager().addon("testfrontend");
@@ -1939,6 +2000,8 @@ void testPunctuationPart2(Instance *instance) {
 int main(int argc, char **testArgs) {
     const bool groupedOnly =
         argc > 1 && std::string_view(testArgs[1]) == "--grouped-shuangpin";
+    const bool pinyinAnnotationOnly =
+        argc > 1 && std::string_view(testArgs[1]) == "--pinyin-annotation";
     setupTestingEnvironment(
         TESTING_BINARY_DIR, {"bin"},
         {TESTING_BINARY_DIR "/test", TESTING_BINARY_DIR "/im",
@@ -1955,6 +2018,12 @@ int main(int argc, char **testArgs) {
     Instance instance(FCITX_ARRAY_SIZE(argv), argv);
     instance.addonManager().registerDefaultLoader(nullptr);
     setup(&instance);
+    if (pinyinAnnotationOnly) {
+        testPinyinAnnotation(&instance);
+        instance.eventDispatcher().schedule([&instance]() { instance.exit(); });
+        instance.exec();
+        return 0;
+    }
     if (groupedOnly) {
         testGroupedShuangpinSchemes(&instance);
         testGroupedShuangpinEditing(&instance);

@@ -192,7 +192,7 @@ StrokeCandidateWord::StrokeCandidateWord(PinyinEngine *engine, std::string hz,
     : PinyinAbstractCandidateWord(selectLength, order), engine_(engine),
       hz_(std::move(hz)) {
     setText(Text(hz_));
-    if (!py.empty()) {
+    if (!py.empty() && engine_->shouldShowPinyinAnnotation(hz_)) {
         setComment(Text(std::format("({})", py)));
     }
 }
@@ -375,6 +375,9 @@ std::string PinyinCandidateWord::customPhraseString() const {
 }
 
 void PinyinCandidateWord::setPinyinInComment() {
+    if (!engine_->shouldShowPinyinAnnotation(text().toString())) {
+        return;
+    }
     auto *state = inputContext_->propertyFor(&engine_->factory());
     auto &context = state->context_;
     if (idx_ >= context.candidatesToCursor().size()) {

@@ -110,6 +110,11 @@ enum class PreeditMode { No, ComposingPinyin, CommitPreview };
 FCITX_CONFIG_ENUM_NAME_WITH_I18N(PreeditMode, N_("Do not show"),
                                  N_("Composing pinyin"), N_("Commit preview"))
 
+enum class PinyinAnnotation { None, Rare, Always };
+
+FCITX_CONFIG_ENUM_NAME_WITH_I18N(PinyinAnnotation, N_("Do not show"),
+                                 N_("Only rare characters"), N_("Always show"))
+
 enum class BackspaceBehaviorOnPrediction {
     OnlyClearCandidates,
     ClearCandidatesAndBackspace,
@@ -209,6 +214,9 @@ FCITX_CONFIGURATION(
     OptionWithAnnotation<PreeditMode, PreeditModeI18NAnnotation> preeditMode{
         this, "PreeditMode", _("Preedit Mode"),
         isAndroid() ? PreeditMode::No : PreeditMode::ComposingPinyin};
+    OptionWithAnnotation<PinyinAnnotation, PinyinAnnotationI18NAnnotation>
+        pinyinAnnotation{this, "PinyinAnnotation", _("Pinyin Annotation"),
+                         PinyinAnnotation::Always};
     Option<bool> preeditCursorPositionAtBeginning{
         this, "PreeditCursorPositionAtBeginning",
         _("Fix embedded preedit cursor at the beginning of the preedit"),
@@ -474,6 +482,7 @@ public:
 
     libime::PinyinIME *ime() { return ime_.get(); }
     const auto &config() const { return config_; }
+    bool shouldShowPinyinAnnotation(std::string_view candidate) const;
 
     void initPredict(InputContext *inputContext);
     void updatePredict(InputContext *inputContext);
