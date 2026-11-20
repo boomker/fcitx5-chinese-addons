@@ -409,6 +409,8 @@ public:
     // The selected onscreen layout remains compact while a physical keyboard
     // temporarily switches the input routing back to ordinary shuangpin.
     bool compactLayout_ = false;
+    // Lowercase letters explicitly selected from the compact key popup.
+    InputBuffer literalInput_{InputBufferOption::AsciiOnly};
     bool lastIsPunc_ = false;
 
     struct ShuangpinSelection {

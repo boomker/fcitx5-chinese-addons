@@ -124,6 +124,7 @@ constexpr uint32_t GroupedConfigEndGroup = 0x0200e201;
 constexpr uint32_t GroupedConfigCommit = 0x0200e202;
 constexpr uint32_t GroupedConfigCharacterBase = 0x0200e210;
 constexpr uint32_t GroupedRepresentativeBase = 0x0200e300;
+constexpr uint32_t GroupedLiteralBase = 0x0200e400;
 constexpr size_t GroupedAlphabetSize = 27;
 constexpr std::array<std::string_view, 18> GroupedKeys = {
     "q",  "we", "rt", "y",  "u", "io", "p", "a",  "sd",
@@ -619,11 +620,16 @@ std::pair<Text, Text> PinyinEngine::preedit(InputContext *inputContext) const {
         }
         break;
     case PreeditMode::CommitPreview:
-        clientPreedit.append(context.sentence(), TextFormatFlag::Underline);
+        clientPreedit.append(!state->literalInput_.empty()
+                                 ? state->literalInput_.userInput()
+                                 : context.sentence(),
+                             TextFormatFlag::Underline);
         if (*config_.preeditCursorPositionAtBeginning) {
             clientPreedit.setCursor(0);
         } else {
-            clientPreedit.setCursor(clientPreedit.textLength());
+            clientPreedit.setCursor(!state->literalInput_.empty()
+                                        ? state->literalInput_.cursor()
+                                        : clientPreedit.textLength());
         }
         [[fallthrough]];
     case PreeditMode::No:
@@ -637,6 +643,9 @@ std::pair<Text, Text> PinyinEngine::preedit(InputContext *inputContext) const {
 std::string
 PinyinEngine::preeditCommitString(InputContext *inputContext) const {
     auto *state = inputContext->propertyFor(&factory_);
+    if (!state->literalInput_.empty()) {
+        return state->literalInput_.userInput();
+    }
     // Use const ref to avoid accidentally change anything.
     const auto &context = state->context_;
 
@@ -671,6 +680,9 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext,
                                 bool forCommit) const {
     const auto *state = inputContext->propertyFor(&factory_);
     const auto &context = state->context_;
+    if (!state->literalInput_.empty()) {
+        return {state->literalInput_.userInput(), state->literalInput_.cursor()};
+    }
     if (!state->groupedInput_ && !forCommit) {
         return context.preeditWithCursor();
     }
@@ -871,8 +883,9 @@ void PinyinEngine::setGroupedInput(InputContext *inputContext, bool grouped,
     }
     // Finish the old composition before changing its interpretation. This
     // also handles a physical keyboard taking over from the compact layout.
-    if (!state->context_.empty()) {
-        const auto text = state->context_.candidates().empty()
+    if (!state->context_.empty() || !state->literalInput_.empty()) {
+        const auto text = !state->literalInput_.empty() ||
+                                  state->context_.candidates().empty()
                               ? preeditCommitString(inputContext)
                               : state->context_.sentence();
         if (!text.empty()) {
@@ -1061,6 +1074,13 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
     inputContext->inputPanel().reset();
     // Use const ref to avoid accidentally change anything.
     const auto &context = state->context_;
+    if (!state->literalInput_.empty()) {
+        state->pendingShuangpinSelection_.reset();
+        updatePreedit(inputContext);
+        inputContext->updatePreedit();
+        inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
+        return;
+    }
     if (context.selected()) {
         auto sentence = context.sentence();
         auto choice =
@@ -2379,7 +2399,7 @@ void PinyinEngine::deactivate(const fcitx::InputMethodEntry &entry,
             break;
         }
 
-        if (state->context_.empty()) {
+        if (state->context_.empty() && state->literalInput_.empty()) {
             break;
         }
 
@@ -2388,7 +2408,9 @@ void PinyinEngine::deactivate(const fcitx::InputMethodEntry &entry,
             inputContext->commitString(preeditCommitString(inputContext));
             break;
         case SwitchInputMethodBehavior::CommitDefault: {
-            inputContext->commitString(state->context_.sentence());
+            inputContext->commitString(state->literalInput_.empty()
+                                           ? state->context_.sentence()
+                                           : state->literalInput_.userInput());
             break;
         }
         case SwitchInputMethodBehavior::Clear:
@@ -2972,6 +2994,10 @@ bool PinyinEngine::handlePunc(KeyEvent &event,
         }
         return false;
     }
+    if (!state->literalInput_.empty()) {
+        inputContext->commitString(state->literalInput_.userInput());
+        doReset(inputContext);
+    }
     if (candidateList && !candidateList->empty()) {
         int idx = std::max(candidateList->cursorIndex(), 0);
         candidateList->candidate(idx).select(inputContext);
@@ -3121,7 +3147,9 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
         sym == GroupedModeBase || sym == GroupedModeBase + 1;
     const bool groupedConfig =
         sym >= GroupedConfigBegin && sym < GroupedRepresentativeBase;
-    if ((groupedKey || groupedMode || groupedConfig) &&
+    const bool literalKey =
+        sym >= GroupedLiteralBase && sym < GroupedLiteralBase + 26;
+    if ((groupedKey || groupedMode || groupedConfig || literalKey) &&
         (event.isRelease() || !event.isVirtual() || !isShuangpinEntry(entry) ||
          event.key().hasModifier())) {
         event.filterAndAccept();
@@ -3165,7 +3193,11 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
         handlePuncCandidate(event);
         resetPredict(inputContext);
         state->compactLayout_ = sym == GroupedModeBase + 1;
-        setGroupedInput(inputContext, state->compactLayout_);
+        // Layout refreshes must not commit a literal composition. A group
+        // press switches it back to shuangpin when the user actually types.
+        if (state->literalInput_.empty()) {
+            setGroupedInput(inputContext, state->compactLayout_);
+        }
         state->context_.setCorrectionEnabled(!state->compactLayout_);
         event.filterAndAccept();
         updateUI(inputContext);
@@ -3301,6 +3333,25 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
         }
         return;
     }
+    if (literalKey) {
+        event.filterAndAccept();
+        if (!state->compactLayout_) {
+            return;
+        }
+        setGroupedInput(inputContext, false);
+        // Ordinary keys may already have disabled grouped decoding without
+        // ending their composition. Keep the two input buffers exclusive.
+        if (!state->context_.empty()) {
+            const auto text = state->context_.candidates().empty()
+                                  ? preeditCommitString(inputContext)
+                                  : state->context_.sentence();
+            inputContext->commitString(text);
+            doReset(inputContext);
+        }
+        state->literalInput_.type('a' + sym - GroupedLiteralBase);
+        updateUI(inputContext);
+        return;
+    }
     if (state->groupedInput_ && (event.key().isLAZ() || event.key().isUAZ() ||
                                  event.key().check(FcitxKey_semicolon))) {
         setGroupedInput(inputContext, false);
@@ -3326,7 +3377,8 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
                 shuangpinProfile->validInitial().contains(chr));
     };
 
-    if (!state->groupedInput_ && !event.key().hasModifier() && quickphrase() &&
+    if (!state->groupedInput_ && state->literalInput_.empty() &&
+        !event.key().hasModifier() && quickphrase() &&
         !quickphraseTriggerRegex_.empty() && !keyStr.get().empty() &&
         state->context_.selectedLength() == 0 &&
         state->context_.cursor() == state->context_.size()) {
@@ -3356,11 +3408,15 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
         }
     }
 
+    const bool literalInput = !state->literalInput_.empty();
+    InputBuffer &buffer = literalInput ? state->literalInput_ : state->context_;
+    const auto selectedLength =
+        literalInput ? 0 : state->context_.selectedLength();
     if (event.key().isLAZ() || event.key().isUAZ() ||
         (event.key().check(FcitxKey_apostrophe) && !state->context_.empty()) ||
         checkSp(event, state)) {
         // first v, use it to trigger quickphrase
-        if (*config_.useVAsQuickphrase && quickphrase() &&
+        if (!literalInput && *config_.useVAsQuickphrase && quickphrase() &&
             state->context_.empty()) {
             const bool isSp = state->context_.useShuangpin();
             if ((event.key().check(FcitxKey_v) && !isSp) ||
@@ -3376,88 +3432,90 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
             }
         }
         event.filterAndAccept();
-        if (!state->context_.type(keyStr.get())) {
+        if (!buffer.type(keyStr.get())) {
             return;
         }
-    } else if (!state->context_.empty()) {
+    } else if (!buffer.empty()) {
         // key to handle when it is not empty.
         if (event.key().check(FcitxKey_BackSpace)) {
-            if (state->context_.useShuangpin() &&
+            if (!literalInput && state->context_.useShuangpin() &&
                 state->context_.cancelSyllable()) {
                 // Undo the latest syllable confirmation before deleting keys.
             } else if (*config_.useBackSpaceToUnselect &&
-                       state->context_.selectedLength()) {
+                       selectedLength) {
                 state->context_.cancel();
             } else {
-                state->context_.backspace();
+                buffer.backspace();
             }
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_Delete) ||
                    event.key().check(FcitxKey_KP_Delete)) {
-            state->context_.del();
+            buffer.del();
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_BackSpace, KeyState::Ctrl)) {
-            if (state->context_.cursor() == state->context_.selectedLength()) {
+            if (!literalInput && buffer.cursor() == selectedLength) {
                 state->context_.cancel();
             }
-            auto cursor = state->context_.pinyinBeforeCursor();
+            auto cursor = literalInput ? 0 : state->context_.pinyinBeforeCursor();
             if (cursor >= 0) {
-                state->context_.erase(cursor, state->context_.cursor());
+                buffer.erase(cursor, buffer.cursor());
             }
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_Delete, KeyState::Ctrl) ||
                    event.key().check(FcitxKey_KP_Delete, KeyState::Ctrl)) {
-            auto cursor = state->context_.pinyinAfterCursor();
+            auto cursor = literalInput ? static_cast<int>(buffer.size())
+                                       : state->context_.pinyinAfterCursor();
             if (cursor >= 0 &&
-                static_cast<size_t>(cursor) <= state->context_.size()) {
-                state->context_.erase(state->context_.cursor(), cursor);
+                static_cast<size_t>(cursor) <= buffer.size()) {
+                buffer.erase(buffer.cursor(), cursor);
             }
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_Home) ||
                    event.key().check(FcitxKey_KP_Home)) {
-            state->context_.setCursor(state->context_.selectedLength());
+            buffer.setCursor(selectedLength);
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_End) ||
                    event.key().check(FcitxKey_KP_End)) {
-            state->context_.setCursor(state->context_.size());
+            buffer.setCursor(buffer.size());
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_Left) ||
                    event.key().check(FcitxKey_KP_Left)) {
-            if (state->context_.cursor() == state->context_.selectedLength()) {
+            if (!literalInput && buffer.cursor() == selectedLength) {
                 state->context_.cancel();
             }
-            auto cursor = state->context_.cursor();
+            auto cursor = buffer.cursor();
             if (cursor > 0) {
-                state->context_.setCursor(cursor - 1);
+                buffer.setCursor(cursor - 1);
             }
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_Right) ||
                    event.key().check(FcitxKey_KP_Right)) {
-            auto cursor = state->context_.cursor();
-            if (cursor < state->context_.size()) {
-                state->context_.setCursor(cursor + 1);
+            auto cursor = buffer.cursor();
+            if (cursor < buffer.size()) {
+                buffer.setCursor(cursor + 1);
             }
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_Left, KeyState::Ctrl) ||
                    event.key().check(FcitxKey_KP_Left, KeyState::Ctrl)) {
-            if (state->context_.cursor() == state->context_.selectedLength()) {
+            if (!literalInput && buffer.cursor() == selectedLength) {
                 state->context_.cancel();
             }
-            auto cursor = state->context_.pinyinBeforeCursor();
+            auto cursor = literalInput ? 0 : state->context_.pinyinBeforeCursor();
             if (cursor >= 0) {
-                state->context_.setCursor(cursor);
+                buffer.setCursor(cursor);
             }
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_Right, KeyState::Ctrl) ||
                    event.key().check(FcitxKey_KP_Right, KeyState::Ctrl)) {
-            auto cursor = state->context_.pinyinAfterCursor();
+            auto cursor = literalInput ? static_cast<int>(buffer.size())
+                                       : state->context_.pinyinAfterCursor();
             if (cursor >= 0 &&
-                static_cast<size_t>(cursor) <= state->context_.size()) {
-                state->context_.setCursor(cursor);
+                static_cast<size_t>(cursor) <= buffer.size()) {
+                buffer.setCursor(cursor);
             }
             event.filterAndAccept();
         } else if (event.key().check(FcitxKey_Escape)) {
-            state->context_.clear();
+            buffer.clear();
             event.filterAndAccept();
         } else if (event.key().checkKeyList(*config_.commitRawInput)) {
             // Key normalization can remove Shift from keypad Enter.
@@ -3470,7 +3528,7 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
                 inputContext->commitString(preeditCommitString(
                     inputContext, originalKey.states().test(KeyState::Shift)));
             }
-            state->context_.clear();
+            buffer.clear();
             state->context_.clearContextWords();
             event.filterAndAccept();
         } else if (auto maybeIdx =
@@ -3577,6 +3635,7 @@ void PinyinEngine::reset(const InputMethodEntry & /*entry*/,
 
 void PinyinEngine::doReset(InputContext *inputContext) const {
     auto *state = inputContext->propertyFor(&factory_);
+    state->literalInput_.clear();
     state->pendingGroupedKeys_.reset();
     state->pendingShuangpinSelection_.reset();
     resetForgetCandidate(inputContext);
@@ -3705,6 +3764,12 @@ void PinyinEngine::invokeActionImpl(const InputMethodEntry &entry,
     }
 
     event.filter();
+
+    if (!state->literalInput_.empty()) {
+        state->literalInput_.setCursor(cursor);
+        updateUI(inputContext);
+        return;
+    }
 
     auto preeditWithCursor = this->preeditWithCursor(inputContext);
     auto selectedSentence = context.selectedSentence();
