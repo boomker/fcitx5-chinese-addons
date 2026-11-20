@@ -6,6 +6,7 @@
  */
 #include "testdir.h"
 #include "testfrontend_public.h"
+#include "../im/pinyin/standardhanzi.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -1531,6 +1532,17 @@ void testForget(Instance *instance) {
 }
 
 void testPinyinAnnotation(Instance *instance) {
+    static_assert(isStandardHanzi(U'你'));
+    static_assert(isStandardHanzi(U'三'));
+    static_assert(isStandardHanzi(U'龢'));
+    static_assert(isStandardHanzi(U'䁖'));
+    static_assert(isStandardHanzi(U'𠳐'));
+    static_assert(isStandardHanzi(U'𫫇'));
+    static_assert(isStandardHanzi(U'𬺓'));
+    static_assert(!isStandardHanzi(U'䫠'));
+    static_assert(!isStandardHanzi(U'彡'));
+    static_assert(!isStandardHanzi(U'國'));
+    static_assert(!isStandardHanzi(U'體'));
     instance->eventDispatcher().schedule([instance]() {
         auto *frontend = instance->addonManager().addon("testfrontend");
         const auto uuid = frontend->call<ITestFrontend::createInputContext>(
@@ -1541,6 +1553,19 @@ void testPinyinAnnotation(Instance *instance) {
         auto *engine = instance->inputMethodEngine(ic);
         const auto *entry = instance->inputMethodEntry(ic);
         FCITX_ASSERT(engine && entry);
+
+        RawConfig description;
+        engine->getConfig()->dumpDescription(description);
+        const auto root = description.get(engine->getConfig()->typeName());
+        FCITX_ASSERT(root);
+        const auto annotation = root->get("PinyinAnnotation");
+        FCITX_ASSERT(annotation);
+        FCITX_ASSERT(annotation->get("DefaultValue")->value() ==
+                     "Only rare characters");
+        FCITX_ASSERT(annotation->get("Enum")->get("2")->value() ==
+                     "Always show");
+        FCITX_ASSERT(annotation->get("Enum")->get("3")->value() ==
+                     "Automatic");
 
         const auto setMode = [&](std::string_view mode) {
             RawConfig config;
@@ -1572,13 +1597,31 @@ void testPinyinAnnotation(Instance *instance) {
         type("nihao");
         FCITX_ASSERT(commentFor("你好").empty());
 
+        setMode("Automatic");
+        type("nihao");
+        FCITX_ASSERT(commentFor("你好").empty());
+
         setMode("Only rare characters");
         type("nihao");
         FCITX_ASSERT(commentFor("你好").empty());
+        ic->reset();
+        type("ni");
+        FCITX_ASSERT(commentFor("你").empty());
 
         setMode("Always show");
         type("ppp");
         FCITX_ASSERT(!commentFor("彡").empty());
+
+        setMode("Automatic");
+        type("ppp");
+        FCITX_ASSERT(!commentFor("彡").empty());
+
+        setMode("Only rare characters");
+        type("ppp");
+        FCITX_ASSERT(!commentFor("彡").empty());
+        ic->reset();
+        type("hhh");
+        FCITX_ASSERT(commentFor("三").empty());
 
         setMode("Do not show");
         type("ppp");

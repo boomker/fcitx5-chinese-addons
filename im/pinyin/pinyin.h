@@ -110,10 +110,12 @@ enum class PreeditMode { No, ComposingPinyin, CommitPreview };
 FCITX_CONFIG_ENUM_NAME_WITH_I18N(PreeditMode, N_("Do not show"),
                                  N_("Composing pinyin"), N_("Commit preview"))
 
-enum class PinyinAnnotation { None, Rare, Always };
+enum class PinyinAnnotation { None, Rare, Always, Auto };
 
+// Keep the stored names compatible with existing configurations.
 FCITX_CONFIG_ENUM_NAME_WITH_I18N(PinyinAnnotation, N_("Do not show"),
-                                 N_("Only rare characters"), N_("Always show"))
+                                 N_("Only rare characters"), N_("Always show"),
+                                 N_("Automatic"))
 
 enum class BackspaceBehaviorOnPrediction {
     OnlyClearCandidates,
@@ -216,7 +218,7 @@ FCITX_CONFIGURATION(
         isAndroid() ? PreeditMode::No : PreeditMode::ComposingPinyin};
     OptionWithAnnotation<PinyinAnnotation, PinyinAnnotationI18NAnnotation>
         pinyinAnnotation{this, "PinyinAnnotation", _("Pinyin Annotation"),
-                         PinyinAnnotation::Always};
+                         PinyinAnnotation::Rare};
     Option<bool> preeditCursorPositionAtBeginning{
         this, "PreeditCursorPositionAtBeginning",
         _("Fix embedded preedit cursor at the beginning of the preedit"),

@@ -497,6 +497,10 @@ msgstr ""
 msgid "Always show"
 msgstr ""
 
+#: im/pinyin/pinyin.h
+msgid "Automatic"
+msgstr ""
+
 #: im/pinyin/pinyin.h:118
 msgid "Only Clear candidates"
 msgstr ""

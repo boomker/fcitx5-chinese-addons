@@ -525,7 +525,11 @@ msgstr "仅生僻字"
 
 #: im/pinyin/pinyin.h
 msgid "Always show"
-msgstr "始终标注"
+msgstr "所有候选"
+
+#: im/pinyin/pinyin.h
+msgid "Automatic"
+msgstr "自动判定"
 
 #: im/pinyin/pinyin.h:118
 msgid "Only Clear candidates"
