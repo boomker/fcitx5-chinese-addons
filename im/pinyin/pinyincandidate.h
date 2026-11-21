@@ -166,7 +166,8 @@ class SymbolCandidateWord : public CandidateWord,
 public:
     SymbolCandidateWord(PinyinEngine *engine, std::string symbol,
                         std::string encodedPinyin, size_t selectLength,
-                        bool isFull, int pinyinCandidateIndex);
+                        bool isFull, int pinyinCandidateIndex,
+                        const CandidateWord *source = nullptr);
 
     void select(InputContext *inputContext) const override;
 
@@ -179,6 +180,7 @@ public:
         return foldedSymbols_;
     }
     void setFoldedSymbols(std::vector<std::string> symbols);
+    std::unique_ptr<SymbolCandidateWord> cloneSymbol(std::string symbol) const;
     // Identify the original text when this symbol is moved to a later page.
     void setSourceComment(std::string_view source);
     // Select foldedSymbols()[index] the way this candidate would be selected.

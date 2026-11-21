@@ -11,6 +11,7 @@
 #include "shuangpincandidate.h"
 #include "symboldictionary.h"
 #include "workerthread.h"
+#include "pinyinviewport_public.h"
 #include <cstddef>
 #include <cstdint>
 #include <fcitx-config/configuration.h>
@@ -392,6 +393,7 @@ FCITX_CONFIGURATION(
 
 struct EventSourceTime;
 class CandidateList;
+class CandidateWord;
 class FrequentEnglishWords;
 class PinyinEngine;
 
@@ -444,6 +446,8 @@ public:
         predictWords_;
 
     int keyReleased_ = -1;
+    // Runtime viewport capacity, never written to the input-method config.
+    int candidateViewportPageSize_ = 0;
     int keyReleasedIndex_ = -2;
     uint64_t lastKeyPressedTime_ = 0;
 };
@@ -491,6 +495,15 @@ public:
 
     void updateUI(InputContext *inputContext);
     void updateFilter(InputContext *inputContext);
+    bool candidateViewportPolicyEnabled(InputContext *inputContext) const;
+    uint64_t candidateViewportGeneration(InputContext *inputContext) const;
+    bool setCandidateViewport(
+        InputContext *inputContext, int firstPageSize,
+        const std::vector<const CandidateWord *> &firstPageCandidates,
+        const CandidateWord *firstSymbolSource, bool automaticSymbols);
+    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, candidateViewportPolicyEnabled);
+    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, candidateViewportGeneration);
+    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, setCandidateViewport);
     void prepareShuangpinSelection(InputContext *inputContext,
                                    size_t selectLength, std::string word,
                                    bool correction = false);
@@ -615,6 +628,7 @@ private:
     std::unique_ptr<EventSource> deferEvent_;
     std::unique_ptr<EventSource> deferredPreload_;
     std::unique_ptr<HandlerTableEntry<EventHandler>> event_;
+    std::unique_ptr<HandlerTableEntry<EventHandler>> candidateViewportEvent_;
     CustomPhraseDict customPhrase_;
     SymbolDict symbols_;
     std::unique_ptr<FrequentEnglishWords> frequentEnglishWords_;

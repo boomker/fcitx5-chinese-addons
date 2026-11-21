@@ -1,6 +1,7 @@
 set(PINYIN_SOURCES
     pinyin.cpp
     candidatebalance.cpp
+    candidatepresentation.cpp
     shuangpincandidate.cpp
     cloudpinyinmatch.cpp
     customphrase.cpp

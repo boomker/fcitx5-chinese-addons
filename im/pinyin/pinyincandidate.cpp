@@ -6,6 +6,7 @@
  */
 
 #include "pinyincandidate.h"
+#include "candidatepresentation.h"
 #include "../../modules/cloudpinyin/cloudpinyin_public.h"
 #include "pinyin.h"
 #include "pinyinhelper_public.h"
@@ -262,12 +263,14 @@ SymbolCandidateWord::SymbolCandidateWord(PinyinEngine *engine,
                                          std::string symbol,
                                          std::string encodedPinyin,
                                          size_t selectLength, bool isFull,
-                                         int pinyinCandidateIndex)
+                                         int pinyinCandidateIndex,
+                                         const CandidateWord *source)
     : engine_(engine), symbol_(std::move(symbol)),
       candidateSegmentLength_(selectLength), isFull_(isFull),
       encodedPinyin_(std::move(encodedPinyin)),
       pinyinCandidateIndex_(pinyinCandidateIndex) {
     setText(Text(symbol_));
+    setSourceCandidate(source);
 }
 
 std::string SymbolCandidateWord::customPhraseString() const {
@@ -286,6 +289,13 @@ void SymbolCandidateWord::setFoldedSymbols(std::vector<std::string> symbols) {
     // Hint that there is more behind this symbol.
     setComment(foldedSymbols_.empty() ? Text() : Text("…"));
     setSpaceBetweenComment(false);
+}
+
+std::unique_ptr<SymbolCandidateWord>
+SymbolCandidateWord::cloneSymbol(std::string symbol) const {
+    return std::make_unique<SymbolCandidateWord>(
+        engine_, std::move(symbol), encodedPinyin_, candidateSegmentLength_,
+        isFull_, pinyinCandidateIndex_, sourceCandidate());
 }
 
 void SymbolCandidateWord::setSourceComment(std::string_view source) {
@@ -777,7 +787,11 @@ void PinyinTabbedCandidateList::buildTabActions() {
 void PinyinTabbedCandidateList::triggerTabAction(int id) {
 
     auto currentCandidateList = inputContext_->inputPanel().candidateList();
-    if (!currentCandidateList || currentCandidateList.get() != candidateList_) {
+    const auto *presentation = dynamic_cast<const PinyinCandidatePresentation *>(
+        currentCandidateList.get());
+    if (!currentCandidateList ||
+        (currentCandidateList.get() != candidateList_ &&
+         (!presentation || presentation->original().get() != candidateList_))) {
         return;
     }
 

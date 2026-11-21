@@ -23,6 +23,7 @@
 #include "spell_public.h"
 #include "standardhanzi.h"
 #include "workerthread.h"
+#include "candidatepresentation.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -1488,7 +1489,7 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                         std::make_unique<SymbolCandidateWord>(
                             this, symbols[i], encodedPinyin,
                             candidate->selectLength(), isFull,
-                            pinyinCandidateIndex);
+                            pinyinCandidateIndex, candidate);
                     if (foldSymbols) {
                         symbolCandidate->setFoldedSymbols(
                             {std::next(symbols.begin()), symbols.end()});
@@ -1648,7 +1649,14 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         candidateList->setTabbedImpl(
             std::make_unique<PinyinTabbedCandidateList>(this, inputContext,
                                                         candidateList.get()));
-        inputPanel.setCandidateList(std::move(candidateList));
+        if (*config_.symbolsEnabled && *config_.foldSymbolCandidates) {
+            std::shared_ptr<CommonCandidateList> original(std::move(candidateList));
+            inputPanel.setCandidateList(std::make_unique<PinyinCandidatePresentation>(
+                std::move(original), selectionKeys_, *config_.pageSize,
+                state->candidateViewportPageSize_));
+        } else {
+            inputPanel.setCandidateList(std::move(candidateList));
+        }
     } while (0);
     inputContext->updatePreedit();
     inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
@@ -1856,6 +1864,23 @@ PinyinEngine::PinyinEngine(Instance *instance)
                 return;
             }
             handle2nd3rdSelection(keyEvent);
+        });
+    candidateViewportEvent_ = instance_->watchEvent(
+        EventType::InputContextFlushUI, EventWatcherPhase::PreInputMethod,
+        [](Event &event) {
+            auto &flush = static_cast<InputContextFlushUIEvent &>(event);
+            if (flush.component() != UserInterfaceComponent::InputPanel) return;
+            auto *inputContext = flush.inputContext();
+            auto *presentation = dynamic_cast<PinyinCandidatePresentation *>(
+                inputContext->inputPanel().candidateList().get());
+            if (!presentation || !presentation->dirty()) return;
+            auto *tabbed = currentPinyinTabbed(inputContext);
+            presentation->filterOriginal(
+                tabbed && tabbed->hasFilter()
+                    ? std::function<bool(const CandidateWord &)>(
+                          [tabbed](const CandidateWord &word) { return tabbed->filter(word); })
+                    : std::function<bool(const CandidateWord &)>{});
+            presentation->refresh(presentation->modified());
         });
 
     // Scheme selection moved to the input method add dialog. Keep the option
@@ -2705,10 +2730,20 @@ void PinyinEngine::updateFilter(InputContext *inputContext) {
     inputPanel.setAuxUp(aux);
     inputPanel.setAuxDown(Text());
 
-    auto *candidateList =
-        dynamic_cast<CommonCandidateList *>(inputPanel.candidateList().get());
+    auto *presentation = dynamic_cast<PinyinCandidatePresentation *>(
+        inputPanel.candidateList().get());
+    auto *candidateList = presentation
+                              ? presentation->original().get()
+                              : dynamic_cast<CommonCandidateList *>(
+                                    inputPanel.candidateList().get());
     if (candidateList) {
-        if (!pinyinTabbed || !pinyinTabbed->hasFilter()) {
+        if (presentation) {
+            presentation->filterOriginal(
+                pinyinTabbed && pinyinTabbed->hasFilter()
+                    ? std::function<bool(const CandidateWord &)>(
+                          [pinyinTabbed](const CandidateWord &word) { return pinyinTabbed->filter(word); })
+                    : std::function<bool(const CandidateWord &)>{});
+        } else if (!pinyinTabbed || !pinyinTabbed->hasFilter()) {
             candidateList->clearFilter();
         } else {
             candidateList->setFilter(
@@ -2720,10 +2755,58 @@ void PinyinEngine::updateFilter(InputContext *inputContext) {
         if (candidateList->totalPages() > 0) {
             candidateList->setPage(0);
         }
+        if (presentation) presentation->refresh();
     }
     updatePreedit(inputContext);
     inputContext->updatePreedit();
     inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
+}
+
+bool PinyinEngine::candidateViewportPolicyEnabled(InputContext *inputContext) const {
+    if (!inputContext || !*config_.symbolsEnabled || !*config_.foldSymbolCandidates)
+        return false;
+    const auto *presentation = dynamic_cast<const PinyinCandidatePresentation *>(
+        inputContext->inputPanel().candidateList().get());
+    return presentation && !presentation->dirty();
+}
+
+uint64_t PinyinEngine::candidateViewportGeneration(InputContext *inputContext) const {
+    if (!inputContext) return 0;
+    const auto *presentation = dynamic_cast<const PinyinCandidatePresentation *>(
+        inputContext->inputPanel().candidateList().get());
+    return presentation ? presentation->generation() : 0;
+}
+
+bool PinyinEngine::setCandidateViewport(
+    InputContext *inputContext, int firstPageSize,
+    const std::vector<const CandidateWord *> &firstPageCandidates,
+    const CandidateWord *firstSymbolSource, bool automaticSymbols) {
+    if (firstPageSize < 0 || (!automaticSymbols && firstPageCandidates.empty()) ||
+        !candidateViewportPolicyEnabled(inputContext)) return false;
+    auto *presentation = dynamic_cast<PinyinCandidatePresentation *>(
+        inputContext->inputPanel().candidateList().get());
+    bool sourceInPrefix = firstSymbolSource == nullptr;
+    size_t symbolCount = 0;
+    for (const auto *word : firstPageCandidates) {
+        bool current = false;
+        for (int index = 0; index < presentation->totalSize(); ++index)
+            current |= &presentation->candidateFromAll(index) == word;
+        if (!current) return false;
+        if (const auto *symbol = dynamic_cast<const SymbolCandidateWord *>(word)) {
+            ++symbolCount;
+            sourceInPrefix |= symbol->sourceCandidate() == firstSymbolSource;
+        }
+    }
+    if ((!automaticSymbols && symbolCount > 1) || !sourceInPrefix) return false;
+    auto *state = inputContext->propertyFor(&factory_);
+    state->candidateViewportPageSize_ = firstPageSize;
+    if (presentation->setViewport(firstPageSize, firstPageCandidates,
+                                  firstSymbolSource, automaticSymbols)) {
+        updatePreedit(inputContext);
+        inputContext->updatePreedit();
+        inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
+    }
+    return true;
 }
 
 void PinyinEngine::updateForgetCandidate(InputContext *inputContext) {
