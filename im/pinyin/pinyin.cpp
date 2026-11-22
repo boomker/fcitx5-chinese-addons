@@ -416,9 +416,11 @@ public:
                                  std::string input,
                                  bool initialPlacement = true,
                                  bool deferredPlacement = false)
-        : PinyinAbstractCandidateWord(2, {}), engine_(engine),
-          inputContext_(inputContext), correction_(std::move(correction)),
-          input_(std::move(input)) {
+        : PinyinAbstractCandidateWord(correction.inputLength, {}),
+          engine_(engine), inputContext_(inputContext),
+          correction_(std::move(correction)), input_(std::move(input)),
+          selectedLength_(inputContext->propertyFor(&engine->factory())
+                              ->context_.selectedLength()) {
         setText(Text(correction_.word));
         if (engine_->shouldShowPinyinAnnotation(correction_.word)) {
             setComment(Text("(" +
@@ -437,7 +439,9 @@ public:
         }
         auto &context =
             inputContext->propertyFor(&engine_->factory())->context_;
-        if (context.userInput() != input_) {
+        if (context.userInput() != input_ ||
+            context.selectedLength() != selectedLength_ ||
+            context.cursor() != context.size()) {
             return;
         }
         engine_->prepareShuangpinSelection(inputContext, selectLength_,
@@ -452,6 +456,7 @@ private:
     InputContext *inputContext_;
     ShuangpinCorrection correction_;
     std::string input_;
+    size_t selectedLength_;
 };
 
 CandidateKind
@@ -1012,20 +1017,21 @@ void PinyinEngine::prepareShuangpinSelection(InputContext *inputContext,
     state->pendingShuangpinSelection_.reset();
     const auto &context = state->context_;
     if (!shouldLearn(inputContext) || state->compactLayout_ ||
-        state->groupedInput_ || selectLength != 2 ||
-        context.size() - context.selectedLength() != 2 ||
-        !shuangpinCorrection(context)) {
+        state->groupedInput_ || !context.useShuangpin() ||
+        !context.shuangpinProfile() ||
+        selectLength != context.size() - context.selectedLength() ||
+        state->shuangpinCorrectionScope_.empty()) {
+        return;
+    }
+    const auto scope = shuangpinSelectionScope(
+        *context.shuangpinProfile(),
+        std::string_view(context.userInput()).substr(context.selectedLength()));
+    if (scope != state->shuangpinCorrectionScope_) {
         return;
     }
     state->pendingShuangpinSelection_ = PinyinState::ShuangpinSelection{
-        shuangpinSelectionScope(*context.shuangpinProfile(),
-                                std::string_view(context.userInput())
-                                    .substr(context.selectedLength())),
-        context.userInput(),
-        context.selectedSentence(),
-        std::move(word),
-        context.selectedLength(),
-        correction};
+        scope,           context.userInput(),      context.selectedSentence(),
+        std::move(word), context.selectedLength(), correction};
 }
 
 void PinyinEngine::forgetShuangpinSelection(InputContext *inputContext,
@@ -1091,6 +1097,7 @@ bool PinyinEngine::shouldShowPinyinAnnotation(
 void PinyinEngine::updateUI(InputContext *inputContext) {
     auto *state = inputContext->propertyFor(&factory_);
     inputContext->inputPanel().reset();
+    state->shuangpinCorrectionScope_.clear();
     // Use const ref to avoid accidentally change anything.
     const auto &context = state->context_;
     if (!state->literalInput_.empty()) {
@@ -1147,6 +1154,12 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         auto correction = corrections.empty()
                               ? std::optional<ShuangpinCorrection>{}
                               : std::make_optional(corrections.front());
+        if (correction) {
+            state->shuangpinCorrectionScope_ =
+                shuangpinSelectionScope(*context.shuangpinProfile(),
+                                        std::string_view(context.userInput())
+                                            .substr(context.selectedLength()));
+        }
         if (pinyinCandidates.empty() && !correction) {
             break;
         }
@@ -1321,7 +1334,9 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         // Explicit custom phrases keep their original selection and pinning
         // semantics rather than being replaced by a recovery hypothesis.
         std::erase_if(corrections, [&](const auto &item) {
-            return customCandidateMap.contains(item.word);
+            const auto it = customCandidateMap.find(item.word);
+            return it != customCandidateMap.end() &&
+                   it->second->selectLength() == item.inputLength;
         });
         correction = corrections.empty()
                          ? std::optional<ShuangpinCorrection>{}
@@ -1330,21 +1345,25 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         for (size_t idx = 0; idx < pinyinCandidates.size(); ++idx) {
             const auto &candidate = pinyinCandidates[idx];
             auto candidateString = candidate.toString();
-            if (correction && candidateString == correction->word) {
+            const auto candidateLength =
+                candidate.sentence().empty()
+                    ? 0
+                    : candidate.sentence().back()->to()->index();
+            const auto encodedPinyin = getEncodedPinyin(candidate);
+            const bool inCorrectionGroup =
+                std::ranges::any_of(corrections, [&](const auto &item) {
+                    return item.word == candidateString &&
+                           item.inputLength == candidateLength &&
+                           std::ranges::equal(item.encodedPinyin,
+                                              encodedPinyin);
+                });
+            if (inCorrectionGroup) {
                 continue;
             }
-            // Keep legal partial selections: an identical glyph that consumes
-            // one initial is different from a correction of the complete pair.
-            // Complete corrected singles come only from the bounded recovery
-            // group, including when the normal fuzzy-correction option is on.
-            if (!candidate.sentence().empty() &&
-                candidate.sentence().back()->to()->index() ==
-                    context.size() - context.selectedLength() &&
-                correction) {
-                const bool inCorrectionGroup =
-                    std::ranges::any_of(corrections, [&](const auto &item) {
-                        return item.word == candidateString;
-                    });
+            // Keep distinct readings and partial selections. The legacy two-key
+            // single-character pool still bounds ordinary fuzzy alternatives.
+            if (correction && correction->inputLength == 2 &&
+                candidateLength == context.size() - context.selectedLength()) {
                 const bool correctedSingle =
                     utf8::length(candidateString) == 1 &&
                     std::ranges::any_of(
@@ -1353,7 +1372,7 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                             return node->as<libime::PinyinLatticeNode>()
                                 .isCorrection();
                         });
-                if (inCorrectionGroup || correctedSingle) {
+                if (correctedSingle) {
                     continue;
                 }
             }
@@ -1366,11 +1385,14 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             CandidateOrder order{candidates.size() - customCandidateMap.size(),
                                  customCandidateMap.size()};
             if (iter != customCandidateMap.end()) {
-                if (iter->second->selectLength() !=
-                    candidate.sentence().back()->to()->index()) {
-                    continue;
+                if (iter->second->selectLength() != candidateLength ||
+                    iter->second->isPinyinCandidate()) {
+                    // The first matching reading owns the pinned slot; other
+                    // readings and selection ranges remain separate choices.
+                    iter = customCandidateMap.end();
+                } else {
+                    order = iter->second->sortOrder();
                 }
-                order = iter->second->sortOrder();
             }
             // Automatic mode preserves the original annotation of later
             // entries in each group of candidates with the same text.
@@ -1568,13 +1590,16 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                         this, inputContext, *correction, context.userInput(),
                         false));
                 extras.emplace_back();
-                infos.push_back({CandidateKind::LooseSingle, 0, false});
+                infos.push_back({utf8::length(correction->word) == 1
+                                     ? CandidateKind::LooseSingle
+                                     : CandidateKind::LoosePhrase,
+                                 0, false});
             }
             std::vector<size_t> base;
             for (const auto &placement : placements)
                 base.push_back(placement.index);
             if (learnedCorrection) {
-                base.insert(base.begin() + std::min(frontSize - 1, base.size()),
+                base.insert(base.begin() + std::min<size_t>(1, base.size()),
                             correctionIndex);
             }
             std::vector<size_t> movableSlots;
@@ -1621,8 +1646,7 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             candidateList->insert(
                 afterLegalCorrection
                     ? candidateList->totalSize()
-                    : std::min<size_t>(deferredCorrection ? frontSize
-                                                          : frontSize - 1,
+                    : std::min<size_t>(deferredCorrection ? frontSize : 1,
                                        candidateList->totalSize()),
                 std::make_unique<ShuangpinCorrectionCandidate>(
                     this, inputContext, std::move(*correction),

@@ -21,6 +21,7 @@ struct ShuangpinCorrection {
     std::string word;
     std::string encodedPinyin;
     std::string code;
+    size_t inputLength = 2;
 };
 
 enum class ShuangpinCorrectionPlacement {
@@ -60,8 +61,9 @@ rankShuangpinCandidates(std::span<const std::string_view> words,
                         std::string_view scope,
                         std::optional<size_t> correctionIndex = std::nullopt);
 
-// At most three distinct neighboring-key corrections. The first is the scoped
-// personal/contextual choice; other entries preserve useful static-frequency
+// At most three full-input corrections. Two-key recovery keeps its scoped
+// personal/contextual choice; longer inputs use constrained recovery decoding.
+// Other entries preserve useful static-frequency
 // and contextual alternatives for later pages. This does not change input,
 // shared fuzzy options, context, or dictionary history.
 std::vector<ShuangpinCorrection>

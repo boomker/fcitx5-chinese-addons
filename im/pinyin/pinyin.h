@@ -434,6 +434,9 @@ public:
         bool correction;
     };
     std::optional<ShuangpinSelection> pendingShuangpinSelection_;
+    // Eligibility from the current candidate build; selection never decodes
+    // again.
+    std::string shuangpinCorrectionScope_;
 
     PinyinMode mode_ = PinyinMode::Normal;
 

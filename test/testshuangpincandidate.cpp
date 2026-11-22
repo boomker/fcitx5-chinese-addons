@@ -149,6 +149,80 @@ void testInvalidPairCorrection() {
     FCITX_ASSERT(!shuangpinCorrection(context));
 }
 
+void testFullInputRecoveryKeepsConsumptionAndPinyin() {
+    auto ime = makeIME();
+    const auto correctionProfile = std::make_shared<PinyinCorrectionProfile>(
+        BuiltinPinyinCorrectionProfile::Qwerty);
+    ime->setCorrectionProfile(correctionProfile);
+    ime->setShuangpinProfile(std::make_shared<ShuangpinProfile>(
+        ShuangpinBuiltinProfile::Xiaohe, correctionProfile.get()));
+    ime->setFuzzyFlags(PinyinFuzzyFlag::Correction);
+    ime->dict()->addWord(PinyinDictionary::SystemDict, "fei'yi", "非遗");
+    ime->dict()->addWord(PinyinDictionary::SystemDict, "fei'fei", "菲菲");
+    PinyinContext context(ime.get());
+    context.setUseShuangpin(true);
+    context.type("fqyi");
+    const auto input = context.userInput();
+    const auto offset = context.nextSyllableOffset();
+    const auto corrections = shuangpinCorrections(context);
+    FCITX_ASSERT(!corrections.empty());
+    FCITX_ASSERT(corrections.size() <= 3);
+    FCITX_ASSERT(corrections.front().word == "非遗");
+    FCITX_ASSERT(corrections.front().inputLength == 4);
+    FCITX_ASSERT(context.userInput() == input);
+    FCITX_ASSERT(context.nextSyllableOffset() == offset);
+    FCITX_ASSERT(context.cursor() == input.size());
+    FCITX_ASSERT(!context.selected());
+    FCITX_ASSERT(ime->model()->history().rawUnigramFrequency({"非遗", ""}) ==
+                 0);
+    context.selectCustom(corrections.front().inputLength,
+                         corrections.front().word,
+                         corrections.front().encodedPinyin);
+    FCITX_ASSERT(context.selected());
+    FCITX_ASSERT(context.selectedSentence() == "非遗");
+    FCITX_ASSERT(context.selectedFullPinyin() == "fei'yi");
+
+    context.clear();
+    context.type("nifqyi");
+    const auto ni = PinyinEncoder::encodeFullPinyin("ni");
+    context.selectCustom(2, "你", std::string(ni.begin(), ni.end()));
+    const auto suffix = shuangpinCorrections(context);
+    FCITX_ASSERT(!suffix.empty());
+    FCITX_ASSERT(suffix.front().word == "非遗");
+    FCITX_ASSERT(suffix.front().inputLength == 4);
+    context.selectCustom(suffix.front().inputLength, suffix.front().word,
+                         suffix.front().encodedPinyin);
+    FCITX_ASSERT(context.selected());
+    FCITX_ASSERT(context.selectedSentence() == "你非遗");
+    FCITX_ASSERT(context.selectedFullPinyin() == "ni'fei'yi");
+
+    context.clear();
+    context.type("fqfq");
+    const auto doubleTypo = shuangpinCorrections(context);
+    FCITX_ASSERT(!doubleTypo.empty());
+    FCITX_ASSERT(doubleTypo.front().word == "菲菲");
+    FCITX_ASSERT(doubleTypo.front().inputLength == 4);
+    context.clear();
+    context.type("fqfqfq");
+    FCITX_ASSERT(shuangpinCorrections(context).empty());
+    context.clear();
+    context.type("fqy");
+    FCITX_ASSERT(shuangpinCorrections(context).empty());
+    context.clear();
+    context.type("fqyi");
+    context.setCursor(2);
+    FCITX_ASSERT(shuangpinCorrections(context).empty());
+    context.setCursor(context.size());
+    FCITX_ASSERT(!shuangpinCorrections(context).empty());
+    ime->setFuzzyFlags(PinyinFuzzyFlag::None);
+    FCITX_ASSERT(shuangpinCorrections(context).empty());
+    // The original two-key recovery is deliberately independent of that switch.
+    context.clear();
+    context.type("fm");
+    FCITX_ASSERT(shuangpinCorrection(context));
+    FCITX_ASSERT(shuangpinCorrection(context)->inputLength == 2);
+}
+
 void testRareInitialWords() {
     auto ime = makeIME();
     ime->setFuzzyFlags(PinyinFuzzyFlag::PartialSp);
@@ -593,8 +667,10 @@ void testCorrectionPoolIsDistinctBoundedAndKeepsPinyinBinding() {
     context.clearContextWords();
     context.type("xg");
     const auto polyphonic = shuangpinCorrections(context);
-    FCITX_ASSERT(polyphonic.size() == 1);
+    FCITX_ASSERT(polyphonic.size() == 2);
     FCITX_ASSERT(polyphonic.front().word == "曾");
+    FCITX_ASSERT(polyphonic[0].encodedPinyin != polyphonic[1].encodedPinyin);
+    FCITX_ASSERT(polyphonic[1].word == "曾");
     FCITX_ASSERT(polyphonic.front().code == "cg" ||
                  polyphonic.front().code == "zg");
     const std::string reading =
@@ -613,6 +689,7 @@ void testCorrectionPoolIsDistinctBoundedAndKeepsPinyinBinding() {
 
 int main() {
     testInvalidPairCorrection();
+    testFullInputRecoveryKeepsConsumptionAndPinyin();
     testRareInitialWords();
     testSelectionScopeAndPersistence();
     testAdaptiveCandidateOrder();

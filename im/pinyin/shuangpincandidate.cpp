@@ -207,13 +207,22 @@ shuangpinCorrections(const libime::PinyinContext &context,
                      const libime::HistoryBigram *history) {
     const auto profile = context.shuangpinProfile();
     if (!context.useShuangpin() || !profile || profile->isGrouped() ||
-        context.cursor() != context.size() ||
-        context.nextSyllableOffset() != context.selectedLength()) {
+        context.cursor() != context.size()) {
         return {};
     }
     const auto keys =
         std::string_view(context.userInput()).substr(context.selectedLength());
-    if (keys.size() != 2 || std::ranges::any_of(keys, [](char c) {
+    if (keys.size() > 2) {
+        std::vector<ShuangpinCorrection> result;
+        for (auto &candidate : context.shuangpinRecoveryCandidates(3)) {
+            result.push_back({std::move(candidate.word),
+                              std::move(candidate.encodedPinyin),
+                              std::string(keys), candidate.inputLength});
+        }
+        return result;
+    }
+    if (context.nextSyllableOffset() != context.selectedLength() ||
+        keys.size() != 2 || std::ranges::any_of(keys, [](char c) {
             return !charutils::islower(c) && c != ';';
         })) {
         return {};
@@ -317,8 +326,11 @@ shuangpinCorrections(const libime::PinyinContext &context,
                         usableContext ? contextual : unigram,
                         combined,
                         count};
-                    const auto [it, inserted] = wordIndices.emplace(
-                        candidate.correction.word, pool.size());
+                    auto identity = candidate.correction.word;
+                    identity.push_back('\0');
+                    identity += candidate.correction.encodedPinyin;
+                    const auto [it, inserted] =
+                        wordIndices.emplace(std::move(identity), pool.size());
                     if (inserted) {
                         pool.push_back(std::move(candidate));
                     } else if (betterCorrection(candidate, pool[it->second])) {
@@ -342,7 +354,9 @@ shuangpinCorrections(const libime::PinyinContext &context,
     std::vector<ScoredCorrection> retained{*best};
     const auto retain = [&](const ScoredCorrection &candidate) {
         if (std::ranges::none_of(retained, [&](const auto &other) {
-                return other.correction.word == candidate.correction.word;
+                return other.correction.word == candidate.correction.word &&
+                       other.correction.encodedPinyin ==
+                           candidate.correction.encodedPinyin;
             })) {
             retained.push_back(candidate);
         }
@@ -360,6 +374,19 @@ shuangpinCorrections(const libime::PinyinContext &context,
             contextBest->combined >=
                 best->combined - MaximumAlternativeLogGap) {
             retain(*contextBest);
+        }
+    }
+    // A different reading is a distinct selectable recovery, even when its
+    // glyph is already represented. Keep it within the same three-item budget.
+    std::sort(pool.begin(), pool.end(), betterCorrection);
+    for (const auto &candidate : pool) {
+        if (retained.size() >= 3) {
+            break;
+        }
+        if (std::ranges::any_of(retained, [&](const auto &other) {
+                return other.correction.word == candidate.correction.word;
+            })) {
+            retain(candidate);
         }
     }
     std::sort(retained.begin(), retained.end(), betterCorrection);
