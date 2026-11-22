@@ -119,10 +119,10 @@ int main() {
         FCITX_ASSERT(ic);
         ic->setCapabilityFlags(CapabilityFlags(CapabilityFlag::Sensitive));
         instance.setCurrentInputMethod(ic, "pinyin", true);
-        const auto configure = [&instance, ic] {
+        const auto configure = [&instance, ic](bool symbols = true) {
             RawConfig config;
             config.setValueByPath("PageSize", "3");
-            config.setValueByPath("SymbolsEnabled", "True");
+            config.setValueByPath("SymbolsEnabled", symbols ? "True" : "False");
             config.setValueByPath("FoldSymbolCandidates", "True");
             config.setValueByPath("Prediction", "False");
             config.setValueByPath("ShuangpinProfile", "Xiaohe");
@@ -272,6 +272,69 @@ int main() {
         instance.postEvent(flush);
         FCITX_ASSERT(&list->candidate(0) == duplicate);
         verifyPolicy(ic, 3);
+
+        // Deferred abbreviation roots keep their symbol children off the
+        // automatic first page, rather than leaving orphaned symbols there.
+        ic->reset();
+        instance.setCurrentInputMethod(ic, "shuangpin", true);
+        configure();
+        type("bq");
+        list = ic->inputPanel().candidateList();
+        for (int index = 0; index < list->size(); ++index) {
+            const auto *source = list->candidate(index).sourceCandidate();
+            FCITX_ASSERT(!source || !source->isAbbreviation() ||
+                         source->isBestAbbreviation());
+            if (source) {
+                bool sourceVisible = false;
+                for (int ordinal = 0; ordinal < list->size(); ++ordinal)
+                    sourceVisible |= &list->candidate(ordinal) == source;
+                FCITX_ASSERT(sourceVisible);
+            }
+        }
+        verifyPolicy(ic, 3);
+
+        // With symbols disabled, abbreviation paging still maps sparse native
+        // indices; promoting a page hint must never mutate the bulk order.
+        ic->reset();
+        instance.setCurrentInputMethod(ic, "shuangpin", true);
+        configure(false);
+        type("wum");
+        FCITX_ASSERT(pinyin->call<IPinyinEngine::candidateViewportPolicyEnabled>(ic));
+        list = ic->inputPanel().candidateList();
+        const CandidateWord *bestAbbreviation = nullptr;
+        for (int index = 0; index < list->toBulk()->totalSize(); ++index) {
+            const auto *word = &list->toBulk()->candidateFromAll(index);
+            if (word->isBestAbbreviation()) bestAbbreviation = word;
+        }
+        FCITX_ASSERT(bestAbbreviation);
+        const auto abbreviationText = bestAbbreviation->text().toString();
+        for (int index = 0; index < 6; ++index)
+            list->toModifiable()->insert(index,
+                std::make_unique<DisplayOnlyCandidateWord>(Text("prefix" + std::to_string(index))));
+        instance.postEvent(flush);
+        list = ic->inputPanel().candidateList();
+        const auto bulkBefore = roots(ic);
+        FCITX_ASSERT(std::find(bulkBefore.begin(), bulkBefore.begin() + 3,
+                              bestAbbreviation) == bulkBefore.begin() + 3);
+        bool abbreviationOnPage = false;
+        for (int index = 0; index < list->size(); ++index) {
+            abbreviationOnPage |= &list->candidate(index) == bestAbbreviation;
+            FCITX_ASSERT(!list->candidate(index).isAbbreviation() ||
+                         list->candidate(index).isBestAbbreviation());
+        }
+        FCITX_ASSERT(abbreviationOnPage);
+        verifyPolicy(ic, 3);
+        prefix = {bulkBefore.front(), bestAbbreviation};
+        FCITX_ASSERT(pinyin->call<IPinyinEngine::setCandidateViewport>(ic, 2, prefix, nullptr, false));
+        FCITX_ASSERT(roots(ic) == bulkBefore);
+        FCITX_ASSERT(&list->candidate(1) == bestAbbreviation);
+        verifyPolicy(ic, 2);
+        const auto bestIndex = std::find(bulkBefore.begin(), bulkBefore.end(), bestAbbreviation) - bulkBefore.begin();
+        FCITX_ASSERT(bestIndex >= 6);
+        FCITX_ASSERT(&list->toBulk()->candidateFromAll(bestIndex) == bestAbbreviation);
+        frontend->call<ITestFrontend::pushCommitExpectation>(abbreviationText);
+        list->toBulk()->candidateFromAll(bestIndex).select(ic);
+        FCITX_ASSERT(!ic->inputPanel().candidateList());
         instance.exit();
     });
     instance.exec();

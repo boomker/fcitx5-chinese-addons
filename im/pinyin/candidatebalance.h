@@ -104,6 +104,27 @@ std::vector<CandidatePlacement>
 placeCandidatesInOrder(std::span<const CandidateInfo> candidates,
                        size_t frontSize = 5);
 
+struct FirstPageCandidateInfo {
+    bool fixed = false;
+    bool abbreviation = false;
+    bool bestAbbreviation = false;
+    bool fallback = false;
+    bool deferredFallback = false;
+};
+
+struct FirstPageCandidateOrder {
+    std::vector<size_t> indices;
+    size_t firstPageSize = 0;
+};
+
+// Page mapping only: keep every fixed slot and the ordinary relative order.
+// Reserve the second slot for recovery and one available front slot for the
+// best abbreviation; other abbreviations wait behind the front page. Fixed
+// user slots win when the capacity cannot satisfy all requested hints.
+FirstPageCandidateOrder
+abbreviationFirstPageOrder(std::span<const FirstPageCandidateInfo> candidates,
+                           size_t capacity);
+
 // Whether word is an everyday English word of two to four letters.
 bool isCommonShortEnglishWord(std::string_view word);
 

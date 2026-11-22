@@ -29,7 +29,8 @@ class PinyinCandidatePresentation final : public CandidateList,
 public:
     PinyinCandidatePresentation(std::shared_ptr<CommonCandidateList> original,
                                 const KeyList &selectionKeys,
-                                int configuredPageSize, int firstPageSize = 0);
+                                int configuredPageSize, int firstPageSize = 0,
+                                bool foldSymbols = true);
     ~PinyinCandidatePresentation() override;
 
     const std::shared_ptr<CommonCandidateList> &original() const {
@@ -115,6 +116,7 @@ private:
     bool usedNext_ = false;
     bool dirty_ = false;
     bool automaticSymbols_ = true;
+    bool foldSymbols_ = true;
     const CandidateWord *firstSymbolSource_ = nullptr;
     std::vector<ViewportEntry> firstPage_;
     std::vector<RawWordState> rawState_;

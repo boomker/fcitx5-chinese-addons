@@ -1405,6 +1405,12 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             if (annotate) {
                 pinyinCandidate->setPinyinInComment();
             }
+            const bool pinned = iter != customCandidateMap.end();
+            if (!pinned && !state->compactLayout_ && !state->groupedInput_) {
+                pinyinCandidate->setAbbreviationHint(
+                    context.isShuangpinAbbreviation(candidate),
+                    context.isBestShuangpinAbbreviation(candidate));
+            }
             if (iter != customCandidateMap.end()) {
                 if (dynamic_cast<CustomPhraseCandidateWord *>(
                         iter->second.get())) {
@@ -1673,11 +1679,16 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         candidateList->setTabbedImpl(
             std::make_unique<PinyinTabbedCandidateList>(this, inputContext,
                                                         candidateList.get()));
-        if (*config_.symbolsEnabled && *config_.foldSymbolCandidates) {
+        bool hasBestAbbreviation = false;
+        for (int index = 0; index < candidateList->totalSize(); ++index)
+            hasBestAbbreviation |= candidateList->candidateFromAll(index).isBestAbbreviation();
+        if ((*config_.symbolsEnabled && *config_.foldSymbolCandidates) ||
+            hasBestAbbreviation) {
             std::shared_ptr<CommonCandidateList> original(std::move(candidateList));
             inputPanel.setCandidateList(std::make_unique<PinyinCandidatePresentation>(
                 std::move(original), selectionKeys_, *config_.pageSize,
-                state->candidateViewportPageSize_));
+                state->candidateViewportPageSize_,
+                *config_.symbolsEnabled && *config_.foldSymbolCandidates));
         } else {
             inputPanel.setCandidateList(std::move(candidateList));
         }
@@ -2787,8 +2798,7 @@ void PinyinEngine::updateFilter(InputContext *inputContext) {
 }
 
 bool PinyinEngine::candidateViewportPolicyEnabled(InputContext *inputContext) const {
-    if (!inputContext || !*config_.symbolsEnabled || !*config_.foldSymbolCandidates)
-        return false;
+    if (!inputContext) return false;
     const auto *presentation = dynamic_cast<const PinyinCandidatePresentation *>(
         inputContext->inputPanel().candidateList().get());
     return presentation && !presentation->dirty();

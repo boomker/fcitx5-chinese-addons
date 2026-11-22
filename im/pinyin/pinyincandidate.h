@@ -231,6 +231,10 @@ public:
     bool isCustomPhrase() const override { return isCustomPhrase_; }
     void setCustomPhrase() { isCustomPhrase_ = true; }
 
+    void setAbbreviationHint(bool abbreviation, bool best) {
+        setAbbreviation(abbreviation, best);
+    }
+
     void setPinyinInComment();
 
 private:

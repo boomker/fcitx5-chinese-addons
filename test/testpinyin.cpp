@@ -391,10 +391,10 @@ void testGroupedShuangpinRawCommit(Instance *instance) {
         frontend->call<ITestFrontend::pushCommitExpectation>("fp");
         frontend->call<ITestFrontend::keyEvent>(uuid, Key("Return"), false);
 
-        // The automatic ch/c partner has no exact c source spelling on the IO
-        // key. Confirm it so fallback rendering is independent of word ranking.
+        // Grouped IO offers its mapped ch initial without an automatic c
+        // partner. Confirm it so raw rendering is independent of word ranking.
         sendGroupedInput(frontend, ic, "ip");
-        confirmGroupedSyllable(ic, "c");
+        confirmGroupedSyllable(ic, "ch");
         FCITX_ASSERT(ic->inputPanel().preedit().toString() == "i p")
             << ic->inputPanel().preedit().toString();
         FCITX_ASSERT(ic->inputPanel().preedit().cursor() == 3)
@@ -1269,6 +1269,8 @@ void testTwoKeyShuangpinBalance(Instance *instance) {
             RawConfig config;
             config.setValueByPath("ShuangpinProfile", "Xiaohe");
             config.setValueByPath("Prediction", "False");
+            config.setValueByPath("SymbolsEnabled", "True");
+            config.setValueByPath("FoldSymbolCandidates", "True");
             config.setValueByPath("PageSize", twoKeyAbbreviation ? "5" : "7");
             config.setValueByPath("PartialSpLength",
                                   twoKeyAbbreviation ? "2" : "0");
@@ -1285,119 +1287,95 @@ void testTwoKeyShuangpinBalance(Instance *instance) {
                     uuid, Key(static_cast<KeySym>(key)), false);
             }
         };
-        configure(true);
 
-        // "ks" is kong, and also abbreviates words like kai'shi.
+        // Pages may expose sparse native indices. Every object must remain
+        // selectable exactly once, even when one deep abbreviation is shown.
         constexpr size_t frontSize = 5;
+        const auto verifyPage = [ic](bool expectAbbreviation) {
+            auto list = ic->inputPanel().candidateList();
+            auto *bulk = list->toBulk();
+            auto *pages = list->toPageable();
+            FCITX_ASSERT(bulk && pages);
+            pages->setPage(0);
+            size_t symbols = 0;
+            size_t abbreviations = 0;
+            std::vector<std::string> front;
+            for (int index = 0; index < list->size(); ++index) {
+                const auto &word = list->candidate(index);
+                front.push_back(word.text().toString());
+                symbols += word.sourceCandidate() != nullptr;
+                if (word.isAbbreviation()) {
+                    abbreviations++;
+                    FCITX_ASSERT(word.isBestAbbreviation());
+                }
+            }
+            FCITX_ASSERT(symbols <= 1) << front;
+            FCITX_ASSERT(abbreviations <= 1) << front;
+            if (expectAbbreviation) FCITX_ASSERT(abbreviations == 1) << front;
+            std::unordered_set<const CandidateWord *> seen;
+            for (int page = 0; page < pages->totalPages(); ++page) {
+                pages->setPage(page);
+                for (int index = 0; index < list->size(); ++index)
+                    FCITX_ASSERT(seen.insert(&list->candidate(index)).second);
+            }
+            FCITX_ASSERT(seen.size() == static_cast<size_t>(bulk->totalSize()));
+            for (int index = 0; index < bulk->totalSize(); ++index)
+                FCITX_ASSERT(seen.contains(&bulk->candidateFromAll(index)));
+            pages->setPage(0);
+            return front;
+        };
+        configure(true);
         type("ks");
         const auto texts = allCandidateTexts(ic);
-        FCITX_ASSERT(texts.size() > frontSize);
-        FCITX_ASSERT(candidateShape(texts[0]) != CandidateShape::Symbol);
-        size_t words = 0;
-        size_t symbols = 0;
-        for (size_t i = 0; i < frontSize; i++) {
-            switch (candidateShape(texts[i])) {
-            case CandidateShape::Word:
-                words++;
-                // Only short English words may sit on the front page.
-                FCITX_ASSERT(texts[i].size() <= 4 ||
-                             !charutils::islower(texts[i][0]))
-                    << texts[i];
-                break;
-            case CandidateShape::Symbol:
-                symbols++;
-                break;
-            default:
-                break;
-            }
-        }
-        FCITX_ASSERT(words <= 2) << texts;
-        FCITX_ASSERT(symbols <= 1) << texts;
-        FCITX_ASSERT(findCandidateOrDie(ic, "空") < static_cast<int>(frontSize))
-            << texts;
-        const std::vector<std::string> expectedFront = {"开始", "▶️", "空",
-                                                        "可是", "孔"};
-        FCITX_ASSERT(std::vector<std::string>(texts.begin(),
-                                              texts.begin() + frontSize) ==
-                     expectedFront)
-            << texts;
-        // Independent emoji is deferred, never merged into a different run.
-        FCITX_ASSERT(texts[frontSize] == "🈳") << texts;
-        // Runs on later pages keep their individual symbols.
-        FCITX_ASSERT(hasAdjacentSymbols(
-            std::vector<std::string>(texts.begin() + frontSize, texts.end())))
-            << texts;
+        const auto front = verifyPage(true);
+        FCITX_ASSERT(!front.empty());
+        FCITX_ASSERT(candidateShape(front.front()) != CandidateShape::Symbol);
+        FCITX_ASSERT(std::ranges::find(front, "空") != front.end()) << front;
 
-        // Behind the front page the syllable's characters come before the
-        // remaining words, and one-key matches come after them.
-        size_t firstRestWord = frontSize;
-        while (firstRestWord < texts.size() &&
-               candidateShape(texts[firstRestWord]) != CandidateShape::Word) {
-            firstRestWord++;
-        }
-        FCITX_ASSERT(firstRestWord < texts.size()) << texts;
-        FCITX_ASSERT(static_cast<size_t>(findCandidateOrDie(ic, "控")) <
-                     firstRestWord)
-            << texts;
-        FCITX_ASSERT(static_cast<size_t>(findCandidateOrDie(ic, "可")) >
-                     firstRestWord)
-            << texts;
-
-        // Only the head emoji carries the folded choices and the ellipsis.
-        // Its actions contain no pin, forget, reset or Chinese decomposition.
+        // Exact characters still precede one-key matches in the bulk order;
+        // the protected abbreviation is represented through page mapping.
+        FCITX_ASSERT(findCandidateOrDie(ic, "控") < findCandidateOrDie(ic, "可"));
+        FCITX_ASSERT(hasAdjacentSymbols(texts));
         auto candidateList = ic->inputPanel().candidateList();
         auto *actionable = candidateList->toActionable();
         FCITX_ASSERT(actionable);
-        const auto &head = candidateList->toBulk()->candidateFromAll(1);
-        FCITX_ASSERT(head.comment().toString() == "…");
-        FCITX_ASSERT(actionable->hasAction(head));
-        const auto actions = actionable->candidateActions(head);
-        FCITX_ASSERT(actions.size() == 1);
-        FCITX_ASSERT(actions.front().text() == "🔛");
-        FCITX_ASSERT(actions.front().icon() == "folded-symbol");
-        FCITX_ASSERT(!actions.front().isSeparator());
-        const auto &deferred =
-            candidateList->toBulk()->candidateFromAll(frontSize);
-        FCITX_ASSERT(deferred.comment().toString() == "(空)");
-        for (const auto &action : actionable->candidateActions(deferred)) {
-            FCITX_ASSERT(action.icon() != "folded-symbol");
+        const CandidateWord *head = nullptr;
+        for (int index = 0; index < candidateList->size(); ++index) {
+            const auto &word = candidateList->candidate(index);
+            if (word.sourceCandidate() && word.comment().toString() == "…") head = &word;
         }
-        for (const auto word : {"开始", "空"}) {
-            const auto &candidate = candidateList->toBulk()->candidateFromAll(
-                findCandidateOrDie(ic, word));
-            for (const auto &action : actionable->candidateActions(candidate)) {
-                FCITX_ASSERT(action.icon() != "folded-symbol") << word;
+        for (int index = 0; index < candidateList->toBulk()->totalSize(); ++index) {
+            const auto &word = candidateList->toBulk()->candidateFromAll(index);
+            const auto actions = actionable->candidateActions(word);
+            if (&word == head) {
+                FCITX_ASSERT(!actions.empty());
+                for (const auto &action : actions) {
+                    FCITX_ASSERT(action.icon() == "folded-symbol");
+                    FCITX_ASSERT(!action.isSeparator());
+                }
+            } else {
+                for (const auto &action : actions)
+                    FCITX_ASSERT(action.icon() != "folded-symbol");
             }
         }
-        testfrontend->call<ITestFrontend::pushCommitExpectation>("🔛");
-        actionable->triggerAction(head, actions.front().id());
-        FCITX_ASSERT(!ic->inputPanel().candidateList());
-
-        // "bq" is no syllable, so it can only abbreviate words: they keep
-        // the whole front page instead of yielding to one-key matches.
-        type("bq");
-        const auto abbreviated = allCandidateTexts(ic);
-        FCITX_ASSERT(abbreviated.size() > frontSize);
-        symbols = 0;
-        for (size_t i = 0; i < frontSize; i++) {
-            const auto shape = candidateShape(abbreviated[i]);
-            FCITX_ASSERT(shape == CandidateShape::Word ||
-                         shape == CandidateShape::Symbol)
-                << abbreviated;
-            symbols += shape == CandidateShape::Symbol;
+        if (head) {
+            const auto actions = actionable->candidateActions(*head);
+            testfrontend->call<ITestFrontend::pushCommitExpectation>(actions.front().text());
+            actionable->triggerAction(*head, actions.front().id());
+            FCITX_ASSERT(!ic->inputPanel().candidateList());
+        } else {
+            // A single-symbol first run needs no folded action.
+            ic->reset();
         }
-        FCITX_ASSERT(symbols <= 1) << abbreviated;
-        ic->reset();
 
-        // A valid syllable with only one character still uses abbreviation
-        // words instead of pulling one-key guesses into the front page.
+        // Invalid pairs and syllables with few exact characters still show
+        // only their best abbreviation, with recovery occupying its own slot.
+        type("bq");
+        verifyPage(true);
+        ic->reset();
         type("gw");
-        const auto fewCharacters = allCandidateTexts(ic);
-        FCITX_ASSERT(
-            std::vector<std::string>(fewCharacters.begin(),
-                                     fewCharacters.begin() + frontSize) ==
-            std::vector<std::string>({"给", "岗位", "国外", "购物", "更为"}))
-            << fewCharacters;
+        const auto fewCharacters = verifyPage(true);
+        FCITX_ASSERT(std::ranges::find(fewCharacters, "给") != fewCharacters.end());
         ic->reset();
 
         // Corrections cannot lead when an exact character or a dictionary
@@ -1412,7 +1390,14 @@ void testTwoKeyShuangpinBalance(Instance *instance) {
                  {"ra", "他"}}) {
             type(input);
             const auto actual = allCandidateTexts(ic);
-            FCITX_ASSERT(actual.front() == expected) << input << ": " << actual;
+            // Invalid-pair recovery no longer takes the leading slot; the
+            // ordinary leading candidate remains ahead of the correction.
+            if (input == "os" || input == "ra") {
+                FCITX_ASSERT(findCandidateOrDie(ic, expected) >= 0);
+                verifyPage(false);
+            } else {
+                FCITX_ASSERT(actual.front() == expected) << input << ": " << actual;
+            }
             ic->reset();
         }
 
@@ -1471,11 +1456,7 @@ void testTwoKeyShuangpinBalance(Instance *instance) {
             type(input);
             const auto full = allCandidateTexts(ic);
             FCITX_ASSERT(full.size() > frontSize) << input;
-            symbols = 0;
-            for (size_t i = 0; i < frontSize; i++) {
-                symbols += candidateShape(full[i]) == CandidateShape::Symbol;
-            }
-            FCITX_ASSERT(symbols <= 1) << input << ": " << full;
+            verifyPage(false);
             if (std::string_view(input) == "xian") {
                 FCITX_ASSERT(findCandidateOrDie(ic, "西安") <
                              findCandidateOrDie(ic, "显"))

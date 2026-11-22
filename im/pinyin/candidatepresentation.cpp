@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 #include "candidatepresentation.h"
+#include "candidatebalance.h"
 #include "pinyincandidate.h"
 #include <algorithm>
 #include <stdexcept>
@@ -12,10 +13,11 @@ namespace fcitx {
 
 PinyinCandidatePresentation::PinyinCandidatePresentation(
     std::shared_ptr<CommonCandidateList> original, const KeyList &selectionKeys,
-    int configuredPageSize, int firstPageSize)
+    int configuredPageSize, int firstPageSize, bool foldSymbols)
     : original_(std::move(original)),
       configuredPageSize_(configuredPageSize),
-      requestedPageSize_(firstPageSize), pageSize_(configuredPageSize) {
+      requestedPageSize_(firstPageSize), pageSize_(configuredPageSize),
+      foldSymbols_(foldSymbols) {
     for (const auto &key : selectionKeys) {
         labels_.emplace_back(key.toString());
     }
@@ -147,6 +149,34 @@ void PinyinCandidatePresentation::refresh(bool resetPage) {
         firstSymbolSource_ = nullptr;
         automaticSymbols_ = true;
     }
+    const bool abbreviationPage = automaticSymbols_ && std::ranges::any_of(
+        ordinary, [](const CandidateWord *word) { return word->isBestAbbreviation(); });
+    std::unordered_set<const CandidateWord *> abbreviationSources;
+    const CandidateWord *abbreviationSymbolSource = nullptr;
+    if (abbreviationPage) {
+        std::vector<FirstPageCandidateInfo> rootInfos;
+        for (const auto *word : ordinary) {
+            const auto *pinyin = dynamic_cast<const PinyinAbstractCandidateWord *>(word);
+            rootInfos.push_back({pinyin && pinyin->isCustomPhrase(),
+                                 word->isAbbreviation(), word->isBestAbbreviation(),
+                                 word->isFallback(), word->isDeferredFallback()});
+        }
+        auto plan = abbreviationFirstPageOrder(rootInfos, pageSize_);
+        if (foldSymbols_ && pageSize_ > 1) {
+            const auto withSymbol = abbreviationFirstPageOrder(rootInfos, pageSize_ - 1);
+            for (size_t ordinal = 0; ordinal < withSymbol.firstPageSize; ++ordinal) {
+                const auto *source = ordinary[withSymbol.indices[ordinal]];
+                if (groupIndices.contains(source) && !source->isDeferredFallback() &&
+                    (!source->isAbbreviation() || source->isBestAbbreviation())) {
+                    abbreviationSymbolSource = source;
+                    plan = withSymbol;
+                    break;
+                }
+            }
+        }
+        for (size_t ordinal = 0; ordinal < plan.firstPageSize; ++ordinal)
+            abbreviationSources.insert(ordinary[plan.indices[ordinal]]);
+    }
     std::unordered_set<const CandidateWord *> frontSources;
     size_t explicitBoundary = 0;
     bool hasExplicitBoundary = false;
@@ -201,18 +231,20 @@ void PinyinCandidatePresentation::refresh(bool resetPage) {
     for (size_t index = 0; index < ordinary.size(); ++index) {
         const auto *word = ordinary[index];
         words_.push_back(word);
-        const bool onFront = automaticSymbols_
-                                 ? !frontFinished
-                                 : frontSources.contains(word);
+        const bool onFront = abbreviationPage
+                                 ? abbreviationSources.contains(word)
+                                 : automaticSymbols_ ? !frontFinished
+                                                     : frontSources.contains(word);
         if (auto group = groupIndices.find(word); group != groupIndices.end()) {
-            const bool fold = onFront && !firstSymbolPlaced &&
-                              (automaticSymbols_
+            const bool fold = foldSymbols_ && onFront && !firstSymbolPlaced &&
+                              (abbreviationPage ? abbreviationSymbolSource == word :
+                               automaticSymbols_
                                    ? static_cast<int>(words_.size()) < pageSize_
                                    : firstSymbolSource_ == word);
             if (fold) {
                 appendGroup(group->second, true, false);
                 firstSymbolPlaced = true;
-            } else if (onFront) {
+            } else if (foldSymbols_ && onFront) {
                 deferred.push_back(group->second);
             } else {
                 appendGroup(group->second, false, false);
@@ -220,7 +252,7 @@ void PinyinCandidatePresentation::refresh(bool resetPage) {
         }
         if (!frontFinished &&
             (automaticSymbols_
-                 ? static_cast<int>(words_.size()) >= pageSize_
+                 ? !abbreviationPage && static_cast<int>(words_.size()) >= pageSize_
                  : hasExplicitBoundary && index + 1 >= explicitBoundary)) {
             finishFront();
         }
@@ -234,9 +266,45 @@ void PinyinCandidatePresentation::refresh(bool resetPage) {
     pageIndices_.clear();
     std::vector<bool> used(words_.size(), false);
     if (automaticSymbols_) {
-        firstPageLength_ = std::min(firstPageLength_, pageSize_);
-        for (int index = 0; index < firstPageLength_; ++index) {
-            pageIndices_.push_back(index);
+        firstPageLength_ = abbreviationPage ? std::min<int>(words_.size(), pageSize_)
+                                           : std::min(firstPageLength_, pageSize_);
+        std::vector<FirstPageCandidateInfo> infos;
+        infos.reserve(words_.size());
+        for (const auto *word : words_) {
+            const auto *pinyin = dynamic_cast<const PinyinAbstractCandidateWord *>(word);
+            const auto *source = word->sourceCandidate();
+            const bool deferredSource = source &&
+                ((source->isAbbreviation() && !source->isBestAbbreviation()) ||
+                 source->isDeferredFallback());
+            infos.push_back({pinyin && pinyin->isCustomPhrase(),
+                             word->isAbbreviation(), word->isBestAbbreviation(),
+                             word->isFallback(),
+                             word->isDeferredFallback() || deferredSource ||
+                                 (abbreviationPage && source &&
+                                  (source != abbreviationSymbolSource ||
+                                   !abbreviationSources.contains(source)))});
+        }
+        auto mapping = abbreviationFirstPageOrder(infos, firstPageLength_);
+        if (abbreviationPage && abbreviationSymbolSource) {
+            const auto sourceIndex = std::find(words_.begin(), words_.end(),
+                                               abbreviationSymbolSource);
+            const auto sourceVisible = sourceIndex != words_.end() &&
+                std::find(mapping.indices.begin(),
+                          mapping.indices.begin() + mapping.firstPageSize,
+                          static_cast<size_t>(sourceIndex - words_.begin())) !=
+                    mapping.indices.begin() + mapping.firstPageSize;
+            if (!sourceVisible) {
+                // Symbol insertion can change a pinned source's absolute slot.
+                // Keep the folded head selectable later, but never orphan it
+                // on a page that cannot also display its source.
+                for (size_t index = 0; index < words_.size(); ++index)
+                    if (words_[index]->sourceCandidate()) infos[index].deferredFallback = true;
+                mapping = abbreviationFirstPageOrder(infos, firstPageLength_);
+            }
+        }
+        firstPageLength_ = static_cast<int>(mapping.firstPageSize);
+        for (const auto index : mapping.indices) {
+            pageIndices_.push_back(static_cast<int>(index));
             used[index] = true;
         }
     } else {

@@ -315,6 +315,71 @@ arrangeCandidates(std::span<const CandidateInfo> candidates, size_t frontSize) {
     return result;
 }
 
+FirstPageCandidateOrder
+abbreviationFirstPageOrder(std::span<const FirstPageCandidateInfo> candidates,
+                           size_t capacity) {
+    const auto count = candidates.size();
+    std::vector<size_t> order(count);
+    std::iota(order.begin(), order.end(), size_t{0});
+    const auto best = std::ranges::find_if(candidates, &FirstPageCandidateInfo::bestAbbreviation);
+    capacity = std::min(capacity, count);
+    if (!capacity || best == candidates.end()) return {std::move(order), capacity};
+    const auto bestIndex = static_cast<size_t>(best - candidates.begin());
+    std::vector<bool> used(count, false);
+    std::vector<bool> reserved(count, false);
+    for (size_t index = 0; index < count; ++index) {
+        if (candidates[index].fixed) used[index] = reserved[index] = true;
+    }
+    const auto fallback = std::ranges::find_if(candidates, &FirstPageCandidateInfo::fallback);
+    const size_t fallbackSlot = capacity > 1 ? 1 : 0;
+    if (!reserved[fallbackSlot] && fallback != candidates.end()) {
+        const auto index = static_cast<size_t>(fallback - candidates.begin());
+        if (!candidates[index].fixed && index != bestIndex) {
+            order[fallbackSlot] = index;
+            used[index] = reserved[fallbackSlot] = true;
+        }
+    }
+    std::vector<size_t> frontSlots;
+    for (size_t index = 0; index < capacity; ++index)
+        if (!reserved[index]) frontSlots.push_back(index);
+    const auto delayed = [&](size_t index) {
+        return (candidates[index].abbreviation && index != bestIndex) ||
+               candidates[index].deferredFallback;
+    };
+    std::vector<size_t> front;
+    for (size_t index = 0; index < count && front.size() < frontSlots.size(); ++index)
+        if (!used[index] && !delayed(index)) front.push_back(index);
+    if (!used[bestIndex] && !frontSlots.empty() &&
+        std::ranges::find(front, bestIndex) == front.end()) {
+        if (front.size() < frontSlots.size()) front.push_back(bestIndex);
+        else front.back() = bestIndex;
+    }
+    for (size_t index = 0; index < front.size(); ++index) {
+        order[frontSlots[index]] = front[index];
+        used[front[index]] = reserved[frontSlots[index]] = true;
+    }
+    std::vector<size_t> rest;
+    for (const bool delay : {false, true})
+        for (size_t index = 0; index < count; ++index)
+            if (!used[index] && delayed(index) == delay) rest.push_back(index);
+    size_t next = 0;
+    for (size_t index = 0; index < count; ++index)
+        if (!reserved[index]) order[index] = rest[next++];
+    size_t fixedBoundary = 0;
+    for (size_t ordinal = 0; ordinal < capacity; ++ordinal)
+        if (candidates[order[ordinal]].fixed) fixedBoundary = ordinal + 1;
+    for (size_t ordinal = 0; ordinal < capacity; ++ordinal) {
+        const auto index = order[ordinal];
+        if (!candidates[index].fixed && !candidates[index].bestAbbreviation && delayed(index)) {
+            // A fixed user slot outranks hiding an extra abbreviation needed
+            // to occupy the preceding page position. No placeholders are added.
+            capacity = std::max(ordinal, fixedBoundary);
+            break;
+        }
+    }
+    return {std::move(order), capacity};
+}
+
 bool isCommonShortEnglishWord(std::string_view word) {
     constexpr size_t minLength = 2;
     constexpr size_t maxLength = 4;

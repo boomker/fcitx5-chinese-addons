@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 #include "../im/pinyin/candidatebalance.h"
+#include <algorithm>
+#include <numeric>
 #include <cstddef>
 #include <cstdint>
 #include <fcitx-utils/log.h>
@@ -264,6 +266,108 @@ void testEveryCandidateIsPlacedOnce() {
     }
 }
 
+void testAbbreviationPageOrder() {
+    std::vector<FirstPageCandidateInfo> candidates(12);
+    candidates[1].abbreviation = true;
+    candidates[2].fixed = true;
+    candidates[5].abbreviation = true;
+    candidates[7].fixed = true;
+    candidates[9].deferredFallback = true;
+    candidates[10].abbreviation = true;
+    candidates[10].bestAbbreviation = true;
+    auto order = abbreviationFirstPageOrder(candidates, 5).indices;
+    FCITX_ASSERT((order == std::vector<size_t>{0, 3, 2, 4, 10, 6, 8, 7, 11, 1, 5, 9}));
+    // Recovery keeps the second page slot without shifting either pinned slot,
+    // including the one beyond the first page.
+    candidates[3].fallback = true;
+    order = abbreviationFirstPageOrder(candidates, 5).indices;
+    FCITX_ASSERT((order == std::vector<size_t>{0, 3, 2, 4, 10, 6, 8, 7, 11, 1, 5, 9}));
+    order = abbreviationFirstPageOrder(candidates, 2).indices;
+    FCITX_ASSERT(order[0] == 10 && order[1] == 3);
+    FCITX_ASSERT(order[2] == 2 && order[7] == 7);
+    order = abbreviationFirstPageOrder(candidates, 1).indices;
+    FCITX_ASSERT(order[0] == 3); // A one-slot page prioritizes recovery.
+    candidates[0].fixed = true;
+    order = abbreviationFirstPageOrder(candidates, 1).indices;
+    FCITX_ASSERT(order[0] == 0); // Custom phrase wins over abbreviation.
+    candidates[1].fixed = true;
+    order = abbreviationFirstPageOrder(candidates, 2).indices;
+    FCITX_ASSERT(order[0] == 0 && order[1] == 1);
+    std::vector<FirstPageCandidateInfo> shortPage(4);
+    shortPage[0].abbreviation = shortPage[1].abbreviation = true;
+    shortPage[2].fixed = true;
+    shortPage[3].abbreviation = shortPage[3].bestAbbreviation = true;
+    const auto shortOrder = abbreviationFirstPageOrder(shortPage, 4);
+    FCITX_ASSERT(shortOrder.indices[2] == 2);
+    FCITX_ASSERT(shortOrder.indices[0] == 3);
+    FCITX_ASSERT(shortOrder.firstPageSize == 3); // Keep fixed slot 2 visible.
+    shortPage[2].fixed = false;
+    FCITX_ASSERT(abbreviationFirstPageOrder(shortPage, 4).firstPageSize == 2);
+    // A symbol whose source abbreviation was deferred shares that layout
+    // classification; it must not fill the source's vacant first-page slot.
+    std::vector<FirstPageCandidateInfo> attached(7);
+    attached[0].abbreviation = attached[0].bestAbbreviation = true;
+    attached[1].abbreviation = true;
+    attached[2].deferredFallback = true;
+    attached[3].abbreviation = true;
+    attached[4].deferredFallback = true;
+    const auto attachedOrder = abbreviationFirstPageOrder(attached, 5);
+    FCITX_ASSERT(attachedOrder.firstPageSize == 3);
+    FCITX_ASSERT((std::vector<size_t>(attachedOrder.indices.begin(),
+                                    attachedOrder.indices.begin() + 3) ==
+                  std::vector<size_t>{0, 5, 6}));
+    // If symbol insertion places its pinned source outside the page, closing
+    // the plan by deferring the head must retain the best and fixed bulk slot.
+    std::vector<FirstPageCandidateInfo> orphan(6);
+    orphan[1].deferredFallback = orphan[2].deferredFallback = true;
+    orphan[3].fixed = true;
+    orphan[4].deferredFallback = true;
+    orphan[5].abbreviation = orphan[5].bestAbbreviation = true;
+    const auto closed = abbreviationFirstPageOrder(orphan, 3);
+    FCITX_ASSERT(closed.indices[3] == 3);
+    FCITX_ASSERT(closed.firstPageSize == 2);
+    FCITX_ASSERT((std::vector<size_t>(closed.indices.begin(), closed.indices.begin() + 2) ==
+                  std::vector<size_t>{0, 5}));
+    candidates[10].bestAbbreviation = false;
+    order = abbreviationFirstPageOrder(candidates, 5).indices;
+    for (size_t i = 0; i < order.size(); ++i) FCITX_ASSERT(order[i] == i);
+}
+
+void testAbbreviationOrderIsCompleteAndStable() {
+    uint32_t seed = 9173;
+    const auto next = [&] { seed = seed * 1664525 + 1013904223; return seed; };
+    for (size_t iteration = 0; iteration < 500; ++iteration) {
+        std::vector<FirstPageCandidateInfo> candidates(next() % 40 + 1);
+        for (auto &candidate : candidates) {
+            candidate.fixed = next() % 5 == 0;
+            candidate.abbreviation = next() % 4 == 0;
+            candidate.deferredFallback = next() % 11 == 0;
+        }
+        const auto best = next() % candidates.size();
+        candidates[best].abbreviation = true;
+        candidates[best].bestAbbreviation = true;
+        const auto fallback = next() % candidates.size();
+        if (fallback != best) candidates[fallback].fallback = true;
+        const auto capacity = next() % 12;
+        const auto order = abbreviationFirstPageOrder(candidates, capacity).indices;
+        FCITX_ASSERT(order.size() == candidates.size());
+        auto sorted = order;
+        std::ranges::sort(sorted);
+        for (size_t i = 0; i < sorted.size(); ++i) {
+            FCITX_ASSERT(sorted[i] == i);
+            if (candidates[i].fixed) FCITX_ASSERT(order[i] == i);
+        }
+        std::vector<size_t> ordinary;
+        for (const auto index : order) {
+            const auto &candidate = candidates[index];
+            if (!candidate.fixed && !candidate.abbreviation &&
+                !candidate.deferredFallback && !candidate.fallback)
+                ordinary.push_back(index);
+        }
+        FCITX_ASSERT(std::ranges::is_sorted(ordinary));
+    }
+}
+
 void testCommonShortEnglishWord() {
     for (std::string_view word :
          {"ok", "hi", "is", "the", "you", "app", "that", "okay", "OK", "Yes"}) {
@@ -326,6 +430,8 @@ int main() {
     testSymbolRunBoundaries();
     testGeneralOrder();
     testEveryCandidateIsPlacedOnce();
+    testAbbreviationPageOrder();
+    testAbbreviationOrderIsCompleteAndStable();
     testCommonShortEnglishWord();
     testFrequentEnglishDictionary();
     return 0;
