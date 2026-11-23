@@ -1385,7 +1385,7 @@ void testTwoKeyShuangpinBalance(Instance *instance) {
                  {"se", "色"},
                  {"no", "挪"},
                  {"we", "巍峨"},
-                 {"fe", "份额"},
+                 {"fe", "反而"},
                  {"os", "种"},
                  {"ra", "他"}}) {
             type(input);
@@ -1397,6 +1397,12 @@ void testTwoKeyShuangpinBalance(Instance *instance) {
                 verifyPage(false);
             } else {
                 FCITX_ASSERT(actual.front() == expected) << input << ": " << actual;
+                if (input == "fe") {
+                    // e also abbreviates er: fan'er wins the shared score,
+                    // while the original fen'e reading remains selectable.
+                    FCITX_ASSERT(findCandidateOrDie(ic, "份额") >= 0);
+                    verifyPage(true);
+                }
             }
             ic->reset();
         }

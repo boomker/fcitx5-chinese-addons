@@ -1360,22 +1360,8 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             if (inCorrectionGroup) {
                 continue;
             }
-            // Keep distinct readings and partial selections. The legacy two-key
-            // single-character pool still bounds ordinary fuzzy alternatives.
-            if (correction && correction->inputLength == 2 &&
-                candidateLength == context.size() - context.selectedLength()) {
-                const bool correctedSingle =
-                    utf8::length(candidateString) == 1 &&
-                    std::ranges::any_of(
-                        candidate.sentence(),
-                        [](const libime::LatticeNode *node) {
-                            return node->as<libime::PinyinLatticeNode>()
-                                .isCorrection();
-                        });
-                if (correctedSingle) {
-                    continue;
-                }
-            }
+            // Keep all decoder-matched readings alongside the ranked recovery
+            // group; inCorrectionGroup already removes its exact duplicates.
             if (state->groupedInput_ &&
                 !customCandidateMap.contains(candidateString) &&
                 isRareShuangpinAbbreviation(candidate, *ime_->model())) {

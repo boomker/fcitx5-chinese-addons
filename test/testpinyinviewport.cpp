@@ -9,6 +9,7 @@
 #include <fcitx-utils/log.h>
 #include <fcitx-utils/standardpaths.h>
 #include <fcitx-utils/testing.h>
+#include <fcitx-utils/utf8.h>
 #include <fcitx/candidateaction.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidatelist.h>
@@ -334,6 +335,59 @@ int main() {
         FCITX_ASSERT(&list->toBulk()->candidateFromAll(bestIndex) == bestAbbreviation);
         frontend->call<ITestFrontend::pushCommitExpectation>(abbreviationText);
         list->toBulk()->candidateFromAll(bestIndex).select(ic);
+        FCITX_ASSERT(!ic->inputPanel().candidateList());
+
+        // An invalid pair keeps vowel-initial abbreviations and all of its
+        // correction readings, without exposing single-key prefix candidates.
+        configure(false);
+        RawConfig invalidPairConfig;
+        instance.inputMethodEngine(ic)->getConfigForInputMethod(
+            *instance.inputMethodEntry(ic))->save(invalidPairConfig);
+        invalidPairConfig.setValueByPath("Fuzzy/Correction", "QWERTY");
+        invalidPairConfig.setValueByPath("PinyinAnnotation", "Always show");
+        instance.inputMethodEngine(ic)->setConfigForInputMethod(
+            *instance.inputMethodEntry(ic), invalidPairConfig);
+        ic->reset();
+        type("qo");
+        list = ic->inputPanel().candidateList();
+        FCITX_ASSERT(list && list->toBulk() && list->toTabbed());
+        std::unordered_set<std::string> correctionReadings;
+        for (const auto &action : list->toTabbed()->tabActions()) {
+            if (action.text() == "qi" || action.text() == "qie" ||
+                action.text() == "wo") {
+                correctionReadings.insert(action.text());
+            }
+        }
+        FCITX_ASSERT(correctionReadings.size() == 3);
+        std::unordered_set<std::string> candidateReadings;
+        bestAbbreviation = nullptr;
+        int invalidPairAbbreviationIndex = -1;
+        size_t singleCandidates = 0;
+        for (int index = 0; index < list->toBulk()->totalSize(); ++index) {
+            const auto &word = list->toBulk()->candidateFromAll(index);
+            if (word.isBestAbbreviation()) {
+                FCITX_ASSERT(!bestAbbreviation);
+                bestAbbreviation = &word;
+                invalidPairAbbreviationIndex = index;
+            }
+            if (utf8::length(word.text().toString()) != 1) continue;
+            const auto reading = word.comment().toString();
+            FCITX_ASSERT(reading == "(qi)" || reading == "(qie)" ||
+                         reading == "(wo)") << word.text() << " " << reading;
+            candidateReadings.insert(reading);
+            ++singleCandidates;
+        }
+        FCITX_ASSERT(candidateReadings.size() == correctionReadings.size());
+        FCITX_ASSERT(singleCandidates > 3);
+        FCITX_ASSERT(bestAbbreviation);
+        abbreviationOnPage = false;
+        for (int index = 0; index < list->size(); ++index)
+            abbreviationOnPage |= &list->candidate(index) == bestAbbreviation;
+        FCITX_ASSERT(abbreviationOnPage);
+        verifyPolicy(ic, 3);
+        frontend->call<ITestFrontend::pushCommitExpectation>(
+            bestAbbreviation->text().toString());
+        list->toBulk()->candidateFromAll(invalidPairAbbreviationIndex).select(ic);
         FCITX_ASSERT(!ic->inputPanel().candidateList());
         instance.exit();
     });
