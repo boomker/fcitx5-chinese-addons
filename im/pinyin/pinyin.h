@@ -128,6 +128,11 @@ struct PinyinAnnotationI18NAnnotation : public NoAnnotation {
     }
 };
 
+enum class PinyinAnnotationPlacement { Top, Right };
+
+FCITX_CONFIG_ENUM_NAME_WITH_I18N(PinyinAnnotationPlacement, N_("Top"),
+                                 N_("Right"))
+
 enum class BackspaceBehaviorOnPrediction {
     OnlyClearCandidates,
     ClearCandidatesAndBackspace,
@@ -230,6 +235,11 @@ FCITX_CONFIGURATION(
     OptionWithAnnotation<PinyinAnnotation, PinyinAnnotationI18NAnnotation>
         pinyinAnnotation{this, "PinyinAnnotation", _("Pinyin Annotation"),
                          PinyinAnnotation::Rare};
+    OptionWithAnnotation<PinyinAnnotationPlacement,
+                         PinyinAnnotationPlacementI18NAnnotation>
+        pinyinAnnotationPlacement{this, "PinyinAnnotationPlacement",
+                                  _("Pinyin Annotation Placement"),
+                                  PinyinAnnotationPlacement::Right};
     Option<bool> preeditCursorPositionAtBeginning{
         this, "PreeditCursorPositionAtBeginning",
         _("Fix embedded preedit cursor at the beginning of the preedit"),
@@ -504,6 +514,8 @@ public:
     bool shouldShowPinyinAnnotation(std::string_view candidate) const;
     std::string candidatePinyinAnnotation(std::string_view candidate,
                                          std::string_view fullPinyin = {});
+    bool candidatePinyinAnnotationOnTop(const CandidateWord *candidate) const;
+    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, candidatePinyinAnnotationOnTop);
 
     void initPredict(InputContext *inputContext);
     void updatePredict(InputContext *inputContext);

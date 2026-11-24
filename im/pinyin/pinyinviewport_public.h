@@ -13,6 +13,8 @@ FCITX_ADDON_DECLARE_FUNCTION(PinyinEngine, candidateViewportPolicyEnabled,
                              bool(fcitx::InputContext *));
 FCITX_ADDON_DECLARE_FUNCTION(PinyinEngine, candidateViewportGeneration,
                              uint64_t(fcitx::InputContext *));
+FCITX_ADDON_DECLARE_FUNCTION(PinyinEngine, candidatePinyinAnnotationOnTop,
+                             bool(const fcitx::CandidateWord *));
 FCITX_ADDON_DECLARE_FUNCTION(
     PinyinEngine, setCandidateViewport,
     bool(fcitx::InputContext *, int,

@@ -1082,6 +1082,17 @@ void PinyinEngine::forgetShuangpinSelection(InputContext *inputContext,
     }
 }
 
+bool PinyinEngine::candidatePinyinAnnotationOnTop(
+    const CandidateWord *candidate) const {
+    if (*config_.pinyinAnnotationPlacement != PinyinAnnotationPlacement::Top ||
+        !candidate || candidate->comment().empty()) {
+        return false;
+    }
+    return dynamic_cast<const PinyinCandidateWord *>(candidate) ||
+           dynamic_cast<const StrokeCandidateWord *>(candidate) ||
+           dynamic_cast<const ShuangpinCorrectionCandidate *>(candidate);
+}
+
 bool PinyinEngine::shouldShowPinyinAnnotation(
     std::string_view candidate) const {
     if (utf8::length(candidate) != 1) {

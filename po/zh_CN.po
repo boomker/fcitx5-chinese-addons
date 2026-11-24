@@ -531,6 +531,18 @@ msgstr "所有单字"
 msgid "Only polyphonic characters"
 msgstr "仅多音字"
 
+#: im/pinyin/pinyin.h
+msgid "Pinyin Annotation Placement"
+msgstr "拼音标注放置"
+
+#: im/pinyin/pinyin.h
+msgid "Top"
+msgstr "顶部"
+
+#: im/pinyin/pinyin.h
+msgid "Right"
+msgstr "右侧"
+
 #: im/pinyin/pinyin.h:118
 msgid "Only Clear candidates"
 msgstr "仅清空候选词"
