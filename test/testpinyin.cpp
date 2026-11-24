@@ -1550,9 +1550,9 @@ void testPinyinAnnotation(Instance *instance) {
         FCITX_ASSERT(annotation->get("DefaultValue")->value() ==
                      "Only rare characters");
         FCITX_ASSERT(annotation->get("Enum")->get("2")->value() ==
-                     "Always show");
-        FCITX_ASSERT(annotation->get("Enum")->get("3")->value() ==
                      "Automatic");
+        FCITX_ASSERT(annotation->get("Enum")->get("3")->value() ==
+                     "Always show");
 
         const auto setMode = [&](std::string_view mode) {
             RawConfig config;
@@ -1578,7 +1578,18 @@ void testPinyinAnnotation(Instance *instance) {
 
         setMode("Always show");
         type("nihao");
-        FCITX_ASSERT(commentFor("你好") == "(ni'hao)");
+        FCITX_ASSERT(commentFor("你好").empty());
+        for (const auto &[input, word, pinyin] :
+             std::vector<std::tuple<std::string, std::string, std::string>>{
+                 {"ni", "你", "nǐ"}, {"lv", "吕", "lǚ"},
+                 {"xing", "行", "xíng"}, {"hang", "行", "háng"},
+                 {"zhong", "重", "zhòng"}, {"chong", "重", "chóng"},
+                 {"hao", "好", "hǎo"}, {"de", "的", "de"},
+                 {"de", "得", "de"}, {"bo", "薄", "bó"}}) {
+            ic->reset();
+            type(input);
+            FCITX_ASSERT(commentFor(word) == "(" + pinyin + ")") << word;
+        }
 
         setMode("Do not show");
         type("nihao");
@@ -1587,6 +1598,19 @@ void testPinyinAnnotation(Instance *instance) {
         setMode("Automatic");
         type("nihao");
         FCITX_ASSERT(commentFor("你好").empty());
+        ic->reset();
+        type("ni");
+        FCITX_ASSERT(commentFor("你").empty());
+        for (const auto &[input, word, pinyin] :
+             std::vector<std::tuple<std::string, std::string, std::string>>{
+                 {"xing", "行", "háng"}, {"hang", "行", "xíng"},
+                 {"zhong", "重", "chóng"}, {"chong", "重", "zhòng"},
+                 {"le", "乐", "yuè"}, {"de", "得", "dé"},
+                 {"de", "的", "dì"}, {"hao", "好", "hào"}}) {
+            ic->reset();
+            type(input);
+            FCITX_ASSERT(commentFor(word) == "(" + pinyin + ")") << word;
+        }
 
         setMode("Only rare characters");
         type("nihao");
@@ -1597,7 +1621,8 @@ void testPinyinAnnotation(Instance *instance) {
 
         setMode("Always show");
         type("ppp");
-        FCITX_ASSERT(!commentFor("彡").empty());
+        FCITX_ASSERT(commentFor("彡") == "(shān)" ||
+                     commentFor("彡") == "(xiǎn)");
 
         setMode("Automatic");
         type("ppp");
@@ -1617,7 +1642,7 @@ void testPinyinAnnotation(Instance *instance) {
         setMode("Only rare characters");
         ic->reset();
         type("pi");
-        FCITX_ASSERT(commentFor("䫠") == "(pi)");
+        FCITX_ASSERT(commentFor("䫠") == "(pī)");
     });
 }
 

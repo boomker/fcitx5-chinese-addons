@@ -92,7 +92,7 @@ protected:
 class StrokeCandidateWord : public PinyinAbstractCandidateWord {
 public:
     StrokeCandidateWord(PinyinEngine *engine, std::string hz,
-                        const std::string &py, size_t selectLength,
+                        size_t selectLength,
                         CandidateOrder order);
 
     void select(InputContext *inputContext) const override;

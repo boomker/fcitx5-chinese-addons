@@ -111,12 +111,22 @@ enum class PreeditMode { No, ComposingPinyin, CommitPreview };
 FCITX_CONFIG_ENUM_NAME_WITH_I18N(PreeditMode, N_("Do not show"),
                                  N_("Composing pinyin"), N_("Commit preview"))
 
-enum class PinyinAnnotation { None, Rare, Always, Auto };
+enum class PinyinAnnotation { None, Rare, Auto, Always };
 
 // Keep the stored names compatible with existing configurations.
-FCITX_CONFIG_ENUM_NAME_WITH_I18N(PinyinAnnotation, N_("Do not show"),
-                                 N_("Only rare characters"), N_("Always show"),
-                                 N_("Automatic"))
+FCITX_CONFIG_ENUM_NAME(PinyinAnnotation, "Do not show", "Only rare characters",
+                         "Automatic", "Always show")
+
+struct PinyinAnnotationI18NAnnotation : public NoAnnotation {
+    void dumpDescription(RawConfig &config) const {
+        static constexpr const char *labels[] = {
+            N_("Do not show"), N_("Only rare characters"),
+            N_("Only polyphonic characters"), N_("All single characters")};
+        for (size_t i = 0; i < std::size(labels); ++i) {
+            config.setValueByPath("EnumI18n/" + std::to_string(i), _(labels[i]));
+        }
+    }
+};
 
 enum class BackspaceBehaviorOnPrediction {
     OnlyClearCandidates,
@@ -492,6 +502,8 @@ public:
     libime::PinyinIME *ime() { return ime_.get(); }
     const auto &config() const { return config_; }
     bool shouldShowPinyinAnnotation(std::string_view candidate) const;
+    std::string candidatePinyinAnnotation(std::string_view candidate,
+                                         std::string_view fullPinyin = {});
 
     void initPredict(InputContext *inputContext);
     void updatePredict(InputContext *inputContext);

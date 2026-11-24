@@ -4,6 +4,7 @@
 #include "testdir.h"
 #include "testfrontend_public.h"
 #include "../im/pinyin/pinyinviewport_public.h"
+#include "../modules/pinyinhelper/pinyinhelper_public.h"
 #include <fcitx-config/rawconfig.h>
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/log.h>
@@ -372,9 +373,15 @@ int main() {
             }
             if (utf8::length(word.text().toString()) != 1) continue;
             const auto reading = word.comment().toString();
-            FCITX_ASSERT(reading == "(qi)" || reading == "(qie)" ||
-                         reading == "(wo)") << word.text() << " " << reading;
-            candidateReadings.insert(reading);
+            auto plain = reading;
+            const auto readings = instance.addonManager().addon("pinyinhelper")
+                ->call<IPinyinHelper::fullLookup>(utf8::getChar(word.text().toString()));
+            for (const auto &[toned, untoned, tone] : readings) {
+                if (reading == "(" + toned + ")") plain = "(" + untoned + ")";
+            }
+            FCITX_ASSERT(plain == "(qi)" || plain == "(qie)" ||
+                         plain == "(wo)") << word.text() << " " << reading;
+            candidateReadings.insert(plain);
             ++singleCandidates;
         }
         FCITX_ASSERT(candidateReadings.size() == correctionReadings.size());

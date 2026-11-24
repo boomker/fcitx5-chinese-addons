@@ -187,14 +187,14 @@ PinyinAbstractCandidateWord::PinyinAbstractCandidateWord(size_t selectLength,
 PinyinAbstractCandidateWord::~PinyinAbstractCandidateWord() = default;
 
 StrokeCandidateWord::StrokeCandidateWord(PinyinEngine *engine, std::string hz,
-                                         const std::string &py,
                                          size_t selectLength,
                                          CandidateOrder order)
     : PinyinAbstractCandidateWord(selectLength, order), engine_(engine),
       hz_(std::move(hz)) {
     setText(Text(hz_));
-    if (!py.empty() && engine_->shouldShowPinyinAnnotation(hz_)) {
-        setComment(Text(std::format("({})", py)));
+    const auto annotation = engine_->candidatePinyinAnnotation(hz_);
+    if (!annotation.empty()) {
+        setComment(Text(std::format("({})", annotation)));
     }
 }
 
@@ -395,8 +395,10 @@ void PinyinCandidateWord::setPinyinInComment() {
     }
     const auto &result = context.candidatesToCursor()[idx_];
     auto fullPinyin = context.candidateFullPinyin(result);
-    if (!fullPinyin.empty()) {
-        setComment(Text(std::format("({})", fullPinyin)));
+    const auto annotation =
+        engine_->candidatePinyinAnnotation(text().toString(), fullPinyin);
+    if (!annotation.empty()) {
+        setComment(Text(std::format("({})", annotation)));
     }
 }
 

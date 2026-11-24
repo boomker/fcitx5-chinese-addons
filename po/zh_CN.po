@@ -524,12 +524,12 @@ msgid "Only rare characters"
 msgstr "仅生僻字"
 
 #: im/pinyin/pinyin.h
-msgid "Always show"
-msgstr "所有候选"
+msgid "All single characters"
+msgstr "所有单字"
 
 #: im/pinyin/pinyin.h
-msgid "Automatic"
-msgstr "自动判定"
+msgid "Only polyphonic characters"
+msgstr "仅多音字"
 
 #: im/pinyin/pinyin.h:118
 msgid "Only Clear candidates"

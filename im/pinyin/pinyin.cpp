@@ -18,6 +18,7 @@
 #include "pinyincandidate.h"
 #include "pinyinconfigmigration.h"
 #include "pinyinhelper_public.h"
+#include "pinyinreadingdata.h"
 #include "punctuation_public.h"
 #include "shuangpincandidate.h"
 #include "spell_public.h"
@@ -31,6 +32,8 @@
 #include <cstdint>
 #include <ctime>
 #include <exception>
+#include <limits>
+#include <stdexcept>
 #include <fcitx-config/iniparser.h>
 #include <fcitx-config/rawconfig.h>
 #include <fcitx-utils/capabilityflags.h>
@@ -422,11 +425,11 @@ public:
           selectedLength_(inputContext->propertyFor(&engine->factory())
                               ->context_.selectedLength()) {
         setText(Text(correction_.word));
-        if (engine_->shouldShowPinyinAnnotation(correction_.word)) {
-            setComment(Text("(" +
-                            libime::PinyinEncoder::decodeFullPinyin(
-                                correction_.encodedPinyin) +
-                            ")"));
+        const auto annotation = engine_->candidatePinyinAnnotation(
+            correction_.word, libime::PinyinEncoder::decodeFullPinyin(
+                                  correction_.encodedPinyin));
+        if (!annotation.empty()) {
+            setComment(Text("(" + annotation + ")"));
         }
         setFallback(initialPlacement);
         setDeferredFallback(deferredPlacement);
@@ -1081,17 +1084,148 @@ void PinyinEngine::forgetShuangpinSelection(InputContext *inputContext,
 
 bool PinyinEngine::shouldShowPinyinAnnotation(
     std::string_view candidate) const {
+    if (utf8::length(candidate) != 1) {
+        return false;
+    }
     switch (*config_.pinyinAnnotation) {
     case PinyinAnnotation::None:
         return false;
     case PinyinAnnotation::Rare:
-        return utf8::length(candidate) == 1 &&
-               !isStandardHanzi(utf8::getChar(candidate));
+        return !isStandardHanzi(utf8::getChar(candidate));
     case PinyinAnnotation::Always:
     case PinyinAnnotation::Auto:
         return true;
     }
     return false;
+}
+
+std::string PinyinEngine::candidatePinyinAnnotation(
+    std::string_view candidate, std::string_view fullPinyin) {
+    if (!shouldShowPinyinAnnotation(candidate)) {
+        return {};
+    }
+    const bool alternate = *config_.pinyinAnnotation == PinyinAnnotation::Auto;
+    auto *helper = pinyinhelper();
+    if (!helper) {
+        return alternate ? std::string{} : std::string(fullPinyin);
+    }
+    const auto readings = helper->call<IPinyinHelper::fullLookup>(
+        utf8::getChar(candidate));
+    if (readings.empty()) {
+        return alternate ? std::string{} : std::string(fullPinyin);
+    }
+
+    const auto normalized = stringutils::replaceAll(
+        stringutils::replaceAll(std::string(fullPinyin), "u:", "ü"), "v", "ü");
+    const auto character = utf8::getChar(candidate);
+    const auto usageBegin = std::lower_bound(
+        std::begin(PinyinReadingData), std::end(PinyinReadingData), character,
+        [](const auto &entry, uint32_t codepoint) {
+            return entry.character < codepoint;
+        });
+    const auto usageFor = [&](std::string_view toned) {
+        for (auto it = usageBegin;
+             it != std::end(PinyinReadingData) && it->character == character;
+             ++it) {
+            if (it->reading == toned) {
+                return std::pair{it->frequency, it->customary};
+            }
+        }
+        return std::pair{0, false};
+    };
+    // Prefer observed per-reading frequencies, then a customary reading.
+    // System dictionary weights are a fallback for unrecorded readings and
+    // deliberately omit user learning so annotations do not fluctuate.
+    const auto mostCommon = [&](const auto &excluded) {
+        size_t best = readings.size();
+        auto bestScore =
+            std::tuple{0, false, -std::numeric_limits<float>::infinity()};
+        for (size_t i = 0; i < readings.size(); ++i) {
+            if (excluded(i)) {
+                continue;
+            }
+            const auto &toned = std::get<0>(readings[i]);
+            const auto &plain = std::get<1>(readings[i]);
+            float score = -std::numeric_limits<float>::infinity();
+            try {
+                score = ime_->dict()
+                            ->lookupWord(libime::PinyinDictionary::SystemDict,
+                                         stringutils::replaceAll(plain, "ü", "v"),
+                                         candidate)
+                            .value_or(score);
+            } catch (const std::invalid_argument &) {
+                // The helper also contains syllabic readings unsupported by
+                // the pinyin encoder; they have no system-dictionary weight.
+            }
+            const auto [frequency, customary] = usageFor(toned);
+            const auto rank = std::tuple{frequency, customary, score};
+            if (best == readings.size() || rank > bestScore) {
+                best = i;
+                bestScore = rank;
+            }
+        }
+        return best;
+    };
+
+    size_t current = readings.size();
+    bool explicitTone = false;
+    for (size_t i = 0; i < readings.size(); ++i) {
+        const auto &[toned, plain, tone] = readings[i];
+        if (normalized == toned && toned != plain) {
+            current = i;
+            explicitTone = true;
+            break;
+        }
+    }
+    // Stroke input has no current pinyin; use the most common reading as its
+    // baseline before selecting an alternate.
+    if (current == readings.size()) {
+        current = mostCommon([&](size_t i) {
+            return !fullPinyin.empty() && std::get<1>(readings[i]) != normalized;
+        });
+    }
+    // Preserve a decoder spelling not found in the helper table, rather than
+    // replacing it with an unrelated reading.
+    if (current == readings.size()) {
+        return alternate ? std::string{} : std::string(fullPinyin);
+    }
+    const auto &currentToned = std::get<0>(readings[current]);
+    const auto &currentPlain = std::get<1>(readings[current]);
+    const auto [frequency, customary] = usageFor(currentToned);
+    const bool currentKnown =
+        explicitTone || frequency > 0 || customary ||
+        std::ranges::none_of(readings, [&](const auto &reading) {
+            return std::get<1>(reading) == currentPlain &&
+                   std::get<0>(reading) != currentToned;
+        });
+    size_t selected = current;
+    if (alternate) {
+        selected = mostCommon([&](size_t i) {
+            return currentKnown ? std::get<0>(readings[i]) == currentToned
+                                : std::get<1>(readings[i]) == currentPlain;
+        });
+        if (selected == readings.size()) {
+            return {};
+        }
+    }
+    const auto &[selectedToned, selectedPlain, selectedTone] = readings[selected];
+    const auto [selectedFrequency, selectedCustomary] = usageFor(selectedToned);
+    if (selectedFrequency > 0 || selectedCustomary ||
+        (!alternate && explicitTone)) {
+        return selectedToned;
+    }
+    // Unknown frequencies are not evidence of rarity. When multiple tones
+    // remain possible without a customary reading, retain the plain syllable.
+    for (const auto &[toned, plain, tone] : readings) {
+        if (plain != selectedPlain ||
+            (alternate && currentKnown && toned == currentToned)) {
+            continue;
+        }
+        if (toned != selectedToned) {
+            return selectedPlain;
+        }
+    }
+    return selectedToned;
 }
 
 void PinyinEngine::updateUI(InputContext *inputContext) {
@@ -1307,14 +1441,10 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                 strokeCandsPos = *config_.pageSize - 1;
             }
             for (auto &result : results) {
-                utf8::getChar(result.first);
-                auto py = pinyinhelper()->call<IPinyinHelper::lookup>(
-                    utf8::getChar(result.first));
-                auto pystr = stringutils::join(py, " ");
                 customCandidateMap.try_emplace(
                     result.first,
                     std::make_unique<StrokeCandidateWord>(
-                        this, result.first, pystr, context.userInput().size(),
+                        this, result.first, context.userInput().size(),
                         CandidateOrder{strokeCandsPos++,
                                        customCandidateMap.size()}));
             }
@@ -1327,7 +1457,6 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
 
         // Save the middle point for inplace_merge.
         std::vector<std::unique_ptr<PinyinAbstractCandidateWord>> candidates;
-        std::unordered_set<std::string> seenPinyinCandidates;
         candidates.reserve(customCandidateMap.size() + pinyinCandidates.size());
         // Reserve the space for custom candidate and start to lay them out.
         candidates.resize(customCandidateMap.size());
@@ -1380,17 +1509,10 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                     order = iter->second->sortOrder();
                 }
             }
-            // Automatic mode preserves the original annotation of later
-            // entries in each group of candidates with the same text.
-            const bool annotate =
-                *config_.pinyinAnnotation != PinyinAnnotation::Auto ||
-                !seenPinyinCandidates.insert(candidateString).second;
             auto pinyinCandidate = std::make_unique<PinyinCandidateWord>(
                 this, inputContext, Text(std::move(candidateString)),
                 candidate.sentence().back()->to()->index(), idx, order);
-            if (annotate) {
-                pinyinCandidate->setPinyinInComment();
-            }
+            pinyinCandidate->setPinyinInComment();
             const bool pinned = iter != customCandidateMap.end();
             if (!pinned && !state->compactLayout_ && !state->groupedInput_) {
                 pinyinCandidate->setAbbreviationHint(

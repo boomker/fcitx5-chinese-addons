@@ -58,6 +58,10 @@ fcitx5_translate_desktop_file("${CMAKE_CURRENT_BINARY_DIR}/pinyin-addon.conf.in"
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/pinyin-addon.conf" RENAME pinyin.conf DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon"
         COMPONENT config)
 
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../LICENSES/Unicode-3.0.txt"
+        RENAME pinyin-reading-usage-LICENSE.txt
+        DESTINATION "${FCITX_INSTALL_PKGDATADIR}/pinyin" COMPONENT config)
+
 install(FILES "symbols" DESTINATION "${FCITX_INSTALL_PKGDATADIR}/pinyin" COMPONENT config)
 install(FILES "sp.dat.example" DESTINATION "${FCITX_INSTALL_PKGDATADIR}/pinyin" COMPONENT config)
 
