@@ -4113,6 +4113,14 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
         // event.key().isSimple() make sure the return value is within range of
         // char.
         char chr = keyChr.get();
+        // The compact layout uses punctuation and digits as private exact-key
+        // aliases. They are decoded only from the private exact-key protocol;
+        // a normal comma or period key must continue through punctuation
+        // handling instead of becoming the alias letters k or m.
+        if (state->groupedInput_ &&
+            GroupedExactCharacters.find(chr) != std::string_view::npos) {
+            return false;
+        }
         return (!state->context_.empty() &&
                 shuangpinProfile->validInput().contains(chr)) ||
                (state->context_.empty() &&
