@@ -1960,8 +1960,10 @@ void testVQuickPhraseTrigger(Instance *instance) {
         instance->setCurrentInputMethod(ic, "shuangpin", true);
         ic->reset();
         testfrontend->call<ITestFrontend::keyEvent>(uuid, Key("V"), false);
+        // In shuangpin, period confirms and commits the current top candidate.
+        testfrontend->call<ITestFrontend::pushCommitExpectation>("V");
         testfrontend->call<ITestFrontend::keyEvent>(uuid, Key("."), false);
-        FCITX_ASSERT(ic->inputPanel().preedit().toString() == "V.");
+        FCITX_ASSERT(ic->inputPanel().preedit().empty());
     });
 }
 
