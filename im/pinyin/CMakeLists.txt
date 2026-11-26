@@ -1,5 +1,6 @@
 set(PINYIN_SOURCES
     pinyin.cpp
+    englishprediction.cpp
     candidatebalance.cpp
     candidatepresentation.cpp
     shuangpincandidate.cpp

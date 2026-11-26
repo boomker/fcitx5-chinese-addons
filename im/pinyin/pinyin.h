@@ -8,6 +8,7 @@
 #define _PINYIN_PINYIN_H_
 
 #include "customphrase.h"
+#include "englishprediction.h"
 #include "shuangpincandidate.h"
 #include "symboldictionary.h"
 #include "workerthread.h"
@@ -441,8 +442,18 @@ public:
     // The selected onscreen layout remains compact while a physical keyboard
     // temporarily switches the input routing back to ordinary shuangpin.
     bool compactLayout_ = false;
-    // Lowercase letters explicitly selected from the compact key popup.
-    InputBuffer literalInput_{InputBufferOption::AsciiOnly};
+    // Popup letters preserve composing text, including an already selected
+    // Hanzi prefix. Capitalized English adds spelling candidates.
+    InputBuffer literalInput_;
+    bool englishInput_ = false;
+    // Preserved composing text before an English suffix started by a popup.
+    std::string englishInputPrefix_;
+    // The last selected standalone English word can seed a learned phrase
+    // when the next Chinese candidate is committed.
+    std::string lastEnglishCommit_;
+    // One allowed-letter set for each English composing position. Singleton
+    // sets are exact keys; compact taps retain every letter in their group.
+    std::vector<std::string> englishGroups_;
     bool lastIsPunc_ = false;
 
     struct ShuangpinSelection {
@@ -490,6 +501,8 @@ public:
     void reset(const InputMethodEntry &entry,
                InputContextEvent &event) override;
     void doReset(InputContext *inputContext) const;
+    void selectEnglishCandidate(InputContext *inputContext,
+                                const std::string &word);
     void save() override;
     auto &factory() { return factory_; }
     std::string subMode(const InputMethodEntry &entry,
@@ -521,6 +534,8 @@ public:
     void updatePredict(InputContext *inputContext);
 
     void updateUI(InputContext *inputContext);
+    void refreshCandidatePreedit(InputContext *inputContext) const;
+    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, refreshCandidatePreedit);
     void updateFilter(InputContext *inputContext);
     bool candidateViewportPolicyEnabled(InputContext *inputContext) const;
     uint64_t candidateViewportGeneration(InputContext *inputContext) const;
@@ -659,6 +674,7 @@ private:
     CustomPhraseDict customPhrase_;
     SymbolDict symbols_;
     std::unique_ptr<FrequentEnglishWords> frequentEnglishWords_;
+    std::unique_ptr<EnglishPredictor> englishPredictor_;
     WorkerThread worker_;
     std::list<std::unique_ptr<TaskToken>> persistentTask_;
     std::list<std::unique_ptr<TaskToken>> tasks_;

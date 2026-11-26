@@ -375,6 +375,114 @@ PinyinTabbedCandidateList *currentPinyinTabbed(InputContext *inputContext) {
     return dynamic_cast<PinyinTabbedCandidateList *>(candidateList->toTabbed());
 }
 
+bool isEnglishCandidate(std::string_view text) {
+    return std::ranges::any_of(text, [](char c) {
+               return charutils::islower(c) || charutils::isupper(c);
+           }) &&
+           std::ranges::all_of(text, [](unsigned char c) { return c < 0x80; });
+}
+
+bool hasEnglishGroups(const PinyinState &state) {
+    return state.englishInput_ &&
+           std::ranges::any_of(state.englishGroups_, [](const auto &letters) {
+               return letters.size() > 1;
+           });
+}
+
+std::pair<std::string, size_t> literalPreedit(
+    const PinyinState &state, const CandidateWord *candidate) {
+    const auto &prefix = state.englishInputPrefix_;
+    const auto prefixLength = prefix.size();
+    const auto prefixChars = utf8::length(prefix);
+    if (!hasEnglishGroups(state) && prefix.empty()) {
+        return {state.literalInput_.userInput(),
+                state.literalInput_.cursorByChar()};
+    }
+    const auto suffixLength = state.literalInput_.size() -
+                              std::min(prefixChars, state.literalInput_.size());
+    if (candidate) {
+        const auto word = candidate->text().toString();
+        if (word.starts_with(prefix) &&
+            isEnglishCandidate(std::string_view(word).substr(prefixLength))) {
+            const auto visibleLength = prefixLength + suffixLength;
+            return {word.substr(0, visibleLength),
+                    std::min(state.literalInput_.cursorByChar(),
+                             prefixChars + suffixLength)};
+        }
+    }
+    // An unmatched group has no exact spelling. Show all its possibilities
+    // rather than silently substituting the representative key.
+    std::string text = prefix;
+    size_t cursor = prefixChars;
+    for (size_t i = 0; i < state.englishGroups_.size(); ++i) {
+        const auto &letters = state.englishGroups_[i];
+        const auto inputIndex = prefixChars + i;
+        if (inputIndex >= state.literalInput_.size()) {
+            break;
+        }
+        if (letters.size() == 1) {
+            text += state.literalInput_.viewAt(inputIndex);
+        } else {
+            text += "[" + letters + "]";
+        }
+        if (inputIndex < state.literalInput_.cursorByChar()) {
+            cursor = utf8::length(text);
+        }
+    }
+    return {std::move(text), cursor};
+}
+
+const CandidateWord *highlightedCandidate(InputContext *inputContext) {
+    const auto list = inputContext->inputPanel().candidateList();
+    if (!list || list->empty()) {
+        return nullptr;
+    }
+    if (list->toBulk() && list->toBulkCursor()) {
+        const auto index = list->toBulkCursor()->globalCursorIndex();
+        if (index >= 0 && index < list->toBulk()->totalSize()) {
+            return &list->toBulk()->candidateFromAll(index);
+        }
+    }
+    return &list->candidate(std::max(0, list->cursorIndex()));
+}
+
+class LiteralCandidateWord : public CandidateWord {
+public:
+    LiteralCandidateWord(PinyinEngine *engine, InputContext *inputContext,
+                         std::string input, std::string word)
+        : CandidateWord(Text(word)), engine_(engine), inputContext_(inputContext),
+          input_(std::move(input)), word_(std::move(word)),
+          groups_(inputContext->propertyFor(&engine->factory())->englishGroups_) {}
+
+    void select(InputContext *inputContext) const override {
+        if (inputContext != inputContext_) {
+            return;
+        }
+        const auto *state = inputContext->propertyFor(&engine_->factory());
+        if (!state->englishInput_ || state->literalInput_.userInput() != input_ ||
+            state->englishGroups_ != groups_) {
+            return;
+        }
+        const bool seedEnglishPrediction =
+            !word_.empty() && std::ranges::all_of(word_, [](unsigned char c) {
+                return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+            });
+        if (seedEnglishPrediction) {
+            engine_->selectEnglishCandidate(inputContext, word_);
+            return;
+        }
+        inputContext->commitString(word_);
+        engine_->doReset(inputContext);
+    }
+
+private:
+    PinyinEngine *engine_;
+    InputContext *inputContext_;
+    std::string input_;
+    std::string word_;
+    std::vector<std::string> groups_;
+};
+
 std::string getEncodedPinyin(const libime::SentenceResult &result) {
     std::string encodedPinyin;
     bool validPinyin = std::all_of(
@@ -633,14 +741,14 @@ std::pair<Text, Text> PinyinEngine::preedit(InputContext *inputContext) const {
         break;
     case PreeditMode::CommitPreview:
         clientPreedit.append(!state->literalInput_.empty()
-                                 ? state->literalInput_.userInput()
+                                 ? preeditWithCursor.first
                                  : context.sentence(),
                              TextFormatFlag::Underline);
         if (*config_.preeditCursorPositionAtBeginning) {
             clientPreedit.setCursor(0);
         } else {
             clientPreedit.setCursor(!state->literalInput_.empty()
-                                        ? state->literalInput_.cursor()
+                                        ? preeditWithCursor.second
                                         : clientPreedit.textLength());
         }
         [[fallthrough]];
@@ -656,7 +764,7 @@ std::string
 PinyinEngine::preeditCommitString(InputContext *inputContext) const {
     auto *state = inputContext->propertyFor(&factory_);
     if (!state->literalInput_.empty()) {
-        return state->literalInput_.userInput();
+        return literalPreedit(*state, highlightedCandidate(inputContext)).first;
     }
     // Use const ref to avoid accidentally change anything.
     const auto &context = state->context_;
@@ -675,6 +783,10 @@ PinyinEngine::preeditCommitString(InputContext *inputContext) const {
 
 std::string PinyinEngine::preeditCommitString(InputContext *inputContext,
                                               bool withSeparator) const {
+    const auto *state = inputContext->propertyFor(&factory_);
+    if (!state->literalInput_.empty()) {
+        return literalPreedit(*state, highlightedCandidate(inputContext)).first;
+    }
     auto text = preeditWithCursor(inputContext, true).first;
     if (!withSeparator) {
         const auto *state = inputContext->propertyFor(&factory_);
@@ -693,10 +805,18 @@ PinyinEngine::preeditWithCursor(InputContext *inputContext,
     const auto *state = inputContext->propertyFor(&factory_);
     const auto &context = state->context_;
     if (!state->literalInput_.empty()) {
-        return {state->literalInput_.userInput(), state->literalInput_.cursor()};
+        return literalPreedit(*state, highlightedCandidate(inputContext));
     }
-    if (!state->groupedInput_ && !forCommit) {
-        return context.preeditWithCursor();
+    if (!forCommit) {
+        if (const auto *word = highlightedCandidate(inputContext);
+            word && isEnglishCandidate(word->text().toString())) {
+            const auto prefix = context.selectedSentence();
+            return {prefix + context.userInput().substr(context.selectedLength()),
+                    prefix.size() + context.cursor() - context.selectedLength()};
+        }
+        if (!state->groupedInput_) {
+            return context.preeditWithCursor();
+        }
     }
     const auto input = std::string_view(context.userInput());
     const auto selected = context.selectedLength();
@@ -967,6 +1087,11 @@ void PinyinEngine::updatePreedit(InputContext *inputContext) const {
     inputPanel.setPreedit(preedit);
 }
 
+void PinyinEngine::refreshCandidatePreedit(InputContext *inputContext) const {
+    updatePreedit(inputContext);
+    inputContext->updatePreedit();
+}
+
 void PinyinEngine::updatePuncPreedit(InputContext *inputContext) const {
     auto candidateList = inputContext->inputPanel().candidateList();
 
@@ -1095,7 +1220,7 @@ bool PinyinEngine::candidatePinyinAnnotationOnTop(
 
 bool PinyinEngine::shouldShowPinyinAnnotation(
     std::string_view candidate) const {
-    if (utf8::length(candidate) != 1) {
+    if (utf8::length(candidate) != 1 || utf8::getChar(candidate) < 0x80) {
         return false;
     }
     switch (*config_.pinyinAnnotation) {
@@ -1241,12 +1366,115 @@ std::string PinyinEngine::candidatePinyinAnnotation(
 
 void PinyinEngine::updateUI(InputContext *inputContext) {
     auto *state = inputContext->propertyFor(&factory_);
+    if (state->literalInput_.empty()) {
+        state->englishInput_ = false;
+        state->englishInputPrefix_.clear();
+        state->englishGroups_.clear();
+    }
     inputContext->inputPanel().reset();
     state->shuangpinCorrectionScope_.clear();
     // Use const ref to avoid accidentally change anything.
     const auto &context = state->context_;
     if (!state->literalInput_.empty()) {
         state->pendingShuangpinSelection_.reset();
+        if (state->englishInput_) {
+            const auto &fullInput = state->literalInput_.userInput();
+            const auto &englishPrefix = state->englishInputPrefix_;
+            const auto input = std::string_view(fullInput).substr(
+                std::min(englishPrefix.size(), fullInput.size()));
+            auto candidates = std::make_unique<CommonCandidateList>();
+            candidates->setPageSize(*config_.pageSize);
+            candidates->setSelectionKey(selectionKeys_);
+            const bool groupedEnglish = hasEnglishGroups(*state);
+            std::unordered_set<std::string> seen;
+            size_t customCandidateCount = 0;
+            customPhrase_.foreachMatchingPrefix(
+                state->englishGroups_,
+                [this, inputContext, &candidates, &fullInput, &englishPrefix, &seen,
+                 &customCandidateCount](
+                    const std::string &, const std::vector<CustomPhrase> &results) {
+                    for (const auto &result : results) {
+                        if (result.order() <= 0) {
+                            continue;
+                        }
+                        auto phrase = result.evaluate(
+                            [this, inputContext](std::string_view key) {
+                                return evaluateCustomPhrase(inputContext, key);
+                            });
+                        auto word = englishPrefix + phrase;
+                        if (seen.insert(word).second) {
+                            candidates->append<LiteralCandidateWord>(
+                                this, inputContext, fullInput,
+                                std::move(word));
+                            if (++customCandidateCount >= 64) {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                });
+            if (!groupedEnglish) {
+                if (seen.insert(std::string(input)).second) {
+                    candidates->append<LiteralCandidateWord>(
+                        this, inputContext, fullInput, std::string(input));
+                }
+            }
+            if (!state->englishGroups_.empty()) {
+                if (!englishPredictor_) {
+                    englishPredictor_ = std::make_unique<EnglishPredictor>();
+                    const auto file = StandardPaths::global().open(
+                        StandardPathsType::PkgData, "spell/en_dict.fscd",
+                        StandardPathsMode::System);
+                    if (file.isValid()) {
+                        IFDStreamBuf buffer(file.fd());
+                        std::istream in(&buffer);
+                        if (!englishPredictor_->load(in)) {
+                            FCITX_WARN()
+                                << "Unable to load grouped English dictionary: "
+                                   "invalid spell/en_dict.fscd";
+                        }
+                    } else {
+                        FCITX_WARN()
+                            << "Unable to open grouped English dictionary: "
+                               "spell/en_dict.fscd";
+                    }
+                }
+                const bool allUpper =
+                    std::ranges::count_if(input, charutils::isupper) > 1 &&
+                    std::ranges::none_of(input, charutils::islower);
+                for (const auto &match : englishPredictor_->match(
+                         state->englishGroups_, 64)) {
+                    auto word = match.word;
+                    for (size_t i = 0; i < word.size(); ++i) {
+                        if (allUpper || (i < input.size() &&
+                                         charutils::isupper(input[i]))) {
+                            word[i] = charutils::toupper(word[i]);
+                        }
+                    }
+                    word.insert(0, englishPrefix);
+                    if (seen.insert(word).second) {
+                        candidates->append<LiteralCandidateWord>(
+                            this, inputContext, fullInput, word);
+                    }
+                }
+            }
+            if (!groupedEnglish && spell()) {
+                const auto hints = spell()->call<ISpell::hintWithProvider>(
+                    "en", SpellProvider::Custom, std::string(input),
+                    std::max<size_t>(10, *config_.pageSize));
+                for (const auto &hint : hints) {
+                    auto word = englishPrefix + hint;
+                    if (isEnglishCandidate(hint) && seen.insert(word).second) {
+                        candidates->append<LiteralCandidateWord>(
+                            this, inputContext, fullInput, std::move(word));
+                    }
+                }
+            }
+            if (!candidates->empty()) {
+                candidates->setGlobalCursorIndex(0);
+            }
+            inputContext->inputPanel().setCandidateList(std::move(candidates));
+        }
         updatePreedit(inputContext);
         inputContext->updatePreedit();
         inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
@@ -1256,6 +1484,8 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
         auto sentence = context.sentence();
         auto choice =
             std::exchange(state->pendingShuangpinSelection_, std::nullopt);
+        auto previousEnglish =
+            std::exchange(state->lastEnglishCommit_, std::string{});
         if (shouldLearn(inputContext)) {
             if (choice && !state->compactLayout_ && !state->groupedInput_ &&
                 context.userInput() == choice->input &&
@@ -1270,7 +1500,27 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                 learnShuangpinSelection(shuangpinHistory_, choice->scope,
                                         choice->word);
             }
+            if (!previousEnglish.empty() && !sentence.empty() &&
+                utf8::getChar(sentence) >= 0x80) {
+                state->context_.setContextWordsWithPinyin(
+                    {{previousEnglish, ""}});
+            }
             state->context_.learn();
+            if (!previousEnglish.empty() && !sentence.empty() &&
+                utf8::getChar(sentence) >= 0x80) {
+                auto &history = ime_->model()->history();
+                if (!history.containsBigram(previousEnglish, sentence)) {
+                    auto nextWords = state->context_.selectedWordsWithPinyin();
+                    if (!nextWords.empty() &&
+                        std::ranges::none_of(nextWords, [](const auto &word) {
+                            return word.first.empty();
+                        })) {
+                        nextWords.insert(nextWords.begin(),
+                                         {previousEnglish, ""});
+                        history.addWithCode(nextWords);
+                    }
+                }
+            }
         }
         inputContext->commitString(sentence);
         inputContext->updatePreedit();
@@ -1812,6 +2062,9 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
             inputPanel.setCandidateList(std::move(candidateList));
         }
     } while (0);
+    if (!context.empty()) {
+        updatePreedit(inputContext);
+    }
     inputContext->updatePreedit();
     inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
 }
@@ -2606,7 +2859,7 @@ void PinyinEngine::deactivate(const fcitx::InputMethodEntry &entry,
         case SwitchInputMethodBehavior::CommitDefault: {
             inputContext->commitString(state->literalInput_.empty()
                                            ? state->context_.sentence()
-                                           : state->literalInput_.userInput());
+                                           : preeditCommitString(inputContext));
             break;
         }
         case SwitchInputMethodBehavior::Clear:
@@ -2830,6 +3083,8 @@ bool PinyinEngine::handleCandidateList(
         } else {
             event.filterAndAccept();
             pageable->prev();
+            updatePreedit(inputContext);
+            inputContext->updatePreedit();
             inputContext->updateUserInterface(
                 UserInterfaceComponent::InputPanel);
             return true;
@@ -2843,6 +3098,8 @@ bool PinyinEngine::handleCandidateList(
     if (auto *movable = candidateList->toCursorMovable()) {
         if (event.key().checkKeyList(*config_.nextCandidate)) {
             movable->nextCandidate();
+            updatePreedit(inputContext);
+            inputContext->updatePreedit();
             inputContext->updateUserInterface(
                 UserInterfaceComponent::InputPanel);
             event.filterAndAccept();
@@ -2850,6 +3107,8 @@ bool PinyinEngine::handleCandidateList(
         }
         if (event.key().checkKeyList(*config_.prevCandidate)) {
             movable->prevCandidate();
+            updatePreedit(inputContext);
+            inputContext->updatePreedit();
             inputContext->updateUserInterface(
                 UserInterfaceComponent::InputPanel);
             event.filterAndAccept();
@@ -2865,6 +3124,8 @@ bool PinyinEngine::handleNextPage(KeyEvent &event) const {
     if (event.key().checkKeyList(*config_.nextPage)) {
         event.filterAndAccept();
         candidateList->toPageable()->next();
+        updatePreedit(inputContext);
+        inputContext->updatePreedit();
         inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
         return true;
     }
@@ -3248,8 +3509,9 @@ bool PinyinEngine::handlePunc(KeyEvent &event,
         return false;
     }
     if (!state->literalInput_.empty()) {
-        inputContext->commitString(state->literalInput_.userInput());
+        inputContext->commitString(preeditCommitString(inputContext));
         doReset(inputContext);
+        candidateList.reset();
     }
     if (candidateList && !candidateList->empty()) {
         int idx = std::max(candidateList->cursorIndex(), 0);
@@ -3401,7 +3663,7 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
     const bool groupedConfig =
         sym >= GroupedConfigBegin && sym < GroupedRepresentativeBase;
     const bool literalKey =
-        sym >= GroupedLiteralBase && sym < GroupedLiteralBase + 26;
+        sym >= GroupedLiteralBase && sym < GroupedLiteralBase + 52;
     if ((groupedKey || groupedMode || groupedConfig || literalKey) &&
         (event.isRelease() || !event.isVirtual() || !isShuangpinEntry(entry) ||
          event.key().hasModifier())) {
@@ -3554,6 +3816,37 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
     if (groupedKey) {
         event.filterAndAccept();
         state->compactLayout_ = true;
+        if (state->englishInput_) {
+            std::string letters;
+            if (legacyGroupedKey) {
+                letters = GroupedKeys[sym - GroupedKeyBase];
+            } else {
+                const auto index = sym - GroupedRepresentativeBase;
+                const auto representative = index == 26 ? ';' : char('a' + index);
+                const auto found = std::ranges::find_if(
+                    state->configuredGroupedKeys_, [representative](const auto &group) {
+                        return group.front() == representative;
+                    });
+                if (found == state->configuredGroupedKeys_.end()) {
+                    return;
+                }
+                letters = *found;
+            }
+            std::erase_if(letters, [](char c) { return !charutils::islower(c); });
+            if (letters.empty()) {
+                return;
+            }
+            const auto cursor = state->literalInput_.cursorByChar();
+            // The placeholder has one editing position, but is never offered
+            // or committed as an arbitrary representative letter.
+            state->literalInput_.type(letters.size() == 1 ? letters : "*");
+            state->englishGroups_.insert(
+                state->englishGroups_.begin() +
+                    std::min(cursor, state->englishGroups_.size()),
+                std::move(letters));
+            updateUI(inputContext);
+            return;
+        }
         char chr;
         if (legacyGroupedKey) {
             state->configuredGroupedKeys_ = defaultGroupedKeys();
@@ -3591,17 +3884,98 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
         if (!state->compactLayout_) {
             return;
         }
-        setGroupedInput(inputContext, false);
-        // Ordinary keys may already have disabled grouped decoding without
-        // ending their composition. Keep the two input buffers exclusive.
+        const auto index = sym - GroupedLiteralBase;
+        const char letter = index < 26 ? 'a' + index : 'A' + index - 26;
+        const bool startsEnglish = state->context_.empty() &&
+                                   state->literalInput_.empty();
+        bool startsGroupedEnglish = false;
+        // Popup letters extend composing text. Only punctuation commits it.
         if (!state->context_.empty()) {
-            const auto text = state->context_.candidates().empty()
-                                  ? preeditCommitString(inputContext)
-                                  : state->context_.sentence();
-            inputContext->commitString(text);
-            doReset(inputContext);
+            const auto &context = state->context_;
+            const auto selected = context.selectedLength();
+            const auto allRemaining =
+                std::string_view(context.userInput()).substr(selected);
+            const auto cursorBefore =
+                context.cursor() > selected ? context.cursor() - selected : 0;
+            const auto beforeCursor =
+                allRemaining.substr(0, std::min(cursorBefore, allRemaining.size()));
+            const auto prefix = context.selectedSentence();
+            const bool semicolon =
+                state->groupedInput_ &&
+                state->groupedSourceProfile_->validInput().contains(';');
+            startsGroupedEnglish =
+                state->groupedInput_ && index < 26 && selected == 0 &&
+                context.nextSyllableOffset() == selected && prefix.empty() &&
+                !allRemaining.empty() &&
+                std::ranges::all_of(allRemaining, charutils::islower);
+            const auto text = startsGroupedEnglish
+                                  ? std::string(allRemaining)
+                                  : preeditCommitString(inputContext);
+            const auto cursor =
+                startsGroupedEnglish
+                    ? std::min(cursorBefore, allRemaining.size())
+                    : utf8::length(prefix) +
+                          utf8::length(state->groupedInput_
+                                           ? groupedInputText(
+                                                 beforeCursor,
+                                                 state->groupedKeys_, semicolon,
+                                                 false)
+                                           : std::string(beforeCursor));
+            const bool cursorAtEnd = context.selectedLength() == 0 &&
+                                     context.cursor() == context.size();
+            std::vector<std::string> migratedEnglishGroups;
+            if (startsGroupedEnglish) {
+                migratedEnglishGroups.reserve(allRemaining.size());
+                for (const auto chr : allRemaining) {
+                    const auto group = std::ranges::find_if(
+                        state->groupedKeys_, [chr](const auto &letters) {
+                            return !letters.empty() && letters.front() == chr;
+                        });
+                    migratedEnglishGroups.push_back(
+                        group == state->groupedKeys_.end()
+                            ? std::string(1, chr)
+                            : *group);
+                }
+            }
+            state->context_.clear();
+            setGroupedInput(inputContext, false);
+            state->literalInput_.type(text);
+            state->literalInput_.setCursor(cursor);
+            if (startsGroupedEnglish) {
+                state->englishInput_ = true;
+                state->englishInputPrefix_.clear();
+                state->englishGroups_ = std::move(migratedEnglishGroups);
+            } else if (cursorAtEnd) {
+                state->englishInput_ = true;
+                state->englishInputPrefix_ = text;
+                state->englishGroups_.clear();
+            }
+        } else if (state->literalInput_.empty()) {
+            setGroupedInput(inputContext, false);
         }
-        state->literalInput_.type('a' + sym - GroupedLiteralBase);
+        if (startsEnglish) {
+            state->englishInput_ = true;
+            state->englishInputPrefix_.clear();
+        }
+        if (state->englishInput_) {
+            state->englishGroups_.insert(
+                state->englishGroups_.begin() +
+                    std::min(state->literalInput_.cursorByChar(),
+                             state->englishGroups_.size()),
+                std::string(1, charutils::tolower(letter)));
+        }
+        state->literalInput_.type(letter);
+        updateUI(inputContext);
+        return;
+    }
+    // Keep capitalized English inside the current IM and onscreen layout.
+    if (event.key().isUAZ() && state->context_.empty() &&
+        state->literalInput_.empty()) {
+        setGroupedInput(inputContext, false);
+        state->englishInput_ = true;
+        state->englishGroups_ = {std::string(1, charutils::tolower(keyChr.get()))};
+        state->literalInput_.type(keyStr.get());
+        event.filterAndAccept();
         updateUI(inputContext);
         return;
     }
@@ -3663,10 +4037,16 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
 
     const bool literalInput = !state->literalInput_.empty();
     InputBuffer &buffer = literalInput ? state->literalInput_ : state->context_;
+    const auto originalSize = buffer.size();
+    const auto originalCursor = buffer.cursor();
     const auto selectedLength =
         literalInput ? 0 : state->context_.selectedLength();
     if (event.key().isLAZ() || event.key().isUAZ() ||
-        (event.key().check(FcitxKey_apostrophe) && !state->context_.empty()) ||
+        (event.key().check(FcitxKey_apostrophe) &&
+         (!state->context_.empty() || literalInput)) ||
+        (literalInput && state->englishInput_ && !event.key().hasModifier() &&
+         ((keyChr.get() >= '0' && keyChr.get() <= '9') ||
+          event.key().check(FcitxKey_minus))) ||
         checkSp(event, state)) {
         // first v, use it to trigger quickphrase
         if (!literalInput && *config_.useVAsQuickphrase && quickphrase() &&
@@ -3809,6 +4189,12 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
                 // Get idx-th char.
                 const std::string_view chr =
                     std::next(utf8::MakeUTF8CharRange(str).begin(), idx).view();
+                if (literalInput) {
+                    inputContext->commitString(std::string(chr));
+                    doReset(inputContext);
+                    event.filterAndAccept();
+                    return;
+                }
                 auto segmentLength =
                     state->context_.size() - state->context_.selectedLength();
                 const auto *pyCandidate =
@@ -3854,6 +4240,24 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
             }
         }
     }
+    if (literalInput && state->englishInput_) {
+        if (buffer.size() > originalSize) {
+            const auto count = buffer.size() - originalSize;
+            for (size_t i = 0; i < count; ++i) {
+                state->englishGroups_.insert(
+                    state->englishGroups_.begin() + std::min(
+                        originalCursor + i, state->englishGroups_.size()),
+                    std::string(1, charutils::tolower(
+                        buffer.userInput()[originalCursor + i])));
+            }
+        } else if (buffer.size() < originalSize) {
+            const auto from = std::min(buffer.cursor(), originalCursor);
+            const auto count = originalSize - buffer.size();
+            const auto end = std::min(from + count, state->englishGroups_.size());
+            state->englishGroups_.erase(state->englishGroups_.begin() + from,
+                                        state->englishGroups_.begin() + end);
+        }
+    }
     if (handlePunc(event, keyChr)) {
         return;
     }
@@ -3886,9 +4290,32 @@ void PinyinEngine::reset(const InputMethodEntry & /*entry*/,
     doReset(inputContext);
 }
 
+void PinyinEngine::selectEnglishCandidate(InputContext *inputContext,
+                                          const std::string &word) {
+    inputContext->commitString(word);
+    doReset(inputContext);
+
+    auto *state = inputContext->propertyFor(&factory_);
+    state->lastEnglishCommit_ = word;
+    state->context_.setContextWordsWithPinyin({{word, ""}});
+    ime_->model()->history().addWithCode({{word, ""}});
+
+    if (*config_.predictionEnabled) {
+        state->predictWords_ = std::vector<libime::HistoryBigram::WordWithCode>{
+            {word, ""}};
+        updatePredict(inputContext);
+    }
+}
+
 void PinyinEngine::doReset(InputContext *inputContext) const {
     auto *state = inputContext->propertyFor(&factory_);
     state->literalInput_.clear();
+    state->englishInput_ = false;
+    state->englishInputPrefix_.clear();
+    state->lastEnglishCommit_.clear();
+    state->englishGroups_.clear();
+    state->englishInputPrefix_.clear();
+    state->lastEnglishCommit_.clear();
     state->pendingGroupedKeys_.reset();
     state->pendingShuangpinSelection_.reset();
     resetForgetCandidate(inputContext);
@@ -4019,6 +4446,22 @@ void PinyinEngine::invokeActionImpl(const InputMethodEntry &entry,
     event.filter();
 
     if (!state->literalInput_.empty()) {
+        if (hasEnglishGroups(*state) &&
+            !highlightedCandidate(inputContext)) {
+            // Unmatched ambiguous keys expand to [letters] in the preedit.
+            // A click within a group stays before that editing position.
+            size_t displayOffset = 0;
+            size_t position = 0;
+            for (const auto &letters : state->englishGroups_) {
+                const auto width = letters.size() == 1 ? 1 : letters.size() + 2;
+                if (displayOffset + width > cursor) {
+                    break;
+                }
+                displayOffset += width;
+                ++position;
+            }
+            cursor = position;
+        }
         state->literalInput_.setCursor(cursor);
         updateUI(inputContext);
         return;

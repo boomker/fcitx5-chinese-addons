@@ -71,6 +71,57 @@ public:
         });
     }
 
+    template <typename T>
+    bool foreachMatchingPrefix(const std::vector<std::string> &letters,
+                               const T &callback) const {
+        if (letters.empty()) {
+            return true;
+        }
+        using Prefix = std::pair<TrieType::position_type, std::string>;
+        std::vector<Prefix> prefixes{{0, {}}};
+        for (const auto &group : letters) {
+            std::vector<Prefix> next;
+            for (const auto &[position, prefix] : prefixes) {
+                for (const auto letter : group) {
+                    const auto append = [&](char candidate) {
+                        auto nextPosition = position;
+                        const auto result = index_.traverseRaw(
+                            std::string_view(&candidate, 1), nextPosition);
+                        if (!TrieType::isNoPathRaw(result)) {
+                            next.emplace_back(nextPosition,
+                                              prefix + candidate);
+                        }
+                    };
+                    append(letter);
+                    if (letter >= 'a' && letter <= 'z') {
+                        append(letter - 'a' + 'A');
+                    } else if (letter >= 'A' && letter <= 'Z') {
+                        append(letter - 'A' + 'a');
+                    }
+                }
+            }
+            prefixes = std::move(next);
+            if (prefixes.empty()) {
+                return true;
+            }
+        }
+
+        std::string suffix;
+        for (const auto &[position, prefix] : prefixes) {
+            if (!index_.foreach(
+                    [this, &suffix, &prefix, &callback](
+                        uint32_t index, size_t length,
+                        TrieType::position_type suffixPosition) {
+                        index_.suffix(suffix, length, suffixPosition);
+                        return callback(prefix + suffix, data_[index]);
+                    },
+                    position)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 private:
     std::vector<CustomPhrase> *getOrCreateEntry(std::string_view key);
     TrieType index_;
