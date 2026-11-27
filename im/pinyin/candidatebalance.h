@@ -110,6 +110,8 @@ struct FirstPageCandidateInfo {
     bool bestAbbreviation = false;
     bool fallback = false;
     bool deferredFallback = false;
+    bool rareEnglish = false;
+    bool rareCompletion = false;
 };
 
 struct FirstPageCandidateOrder {

@@ -435,4 +435,19 @@ bool isRareShuangpinAbbreviation(const libime::SentenceResult &candidate,
     return false;
 }
 
+bool isRareShuangpinCompletion(const libime::SentenceResult &candidate,
+                              const libime::UserLanguageModel &model) {
+    constexpr float minimumUnigramScore = -6.0F;
+    for (const auto *node : candidate.sentence()) {
+        const auto &encoded =
+            node->as<libime::PinyinLatticeNode>().encodedPinyin();
+        if (encoded.size() > (node->path().size() - 1) * 2 &&
+            model.history().rawUnigramFrequency({node->word(), encoded}) == 0 &&
+            model.singleWordScore(node->word()) < minimumUnigramScore) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace fcitx

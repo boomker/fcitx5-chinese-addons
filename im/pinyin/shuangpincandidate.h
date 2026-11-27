@@ -79,6 +79,11 @@ shuangpinCorrection(const libime::PinyinContext &context,
 bool isRareShuangpinAbbreviation(const libime::SentenceResult &candidate,
                                  const libime::UserLanguageModel &model);
 
+// Long-word completions have more syllables than matched input segments.
+// Keep common and learned completions eligible for the automatic first page.
+bool isRareShuangpinCompletion(const libime::SentenceResult &candidate,
+                              const libime::UserLanguageModel &model);
+
 } // namespace fcitx
 
 #endif

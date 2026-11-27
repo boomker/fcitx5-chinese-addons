@@ -103,9 +103,11 @@ bool PinyinCandidatePresentation::setViewport(
 
 void PinyinCandidatePresentation::refresh(bool resetPage) {
     const int oldPage = page_;
+    const bool oldCursorExplicit = cursorExplicit_;
     const auto oldAnchor = !resetPage && size() > 0
                                ? identity(&candidate(0)) : WordIdentity{};
-    const auto oldCursor = cursor_ >= 0 && cursor_ < totalSize()
+    const auto oldCursor = !resetPage && (oldCursorExplicit || oldPage > 0) &&
+                                   cursor_ >= 0 && cursor_ < totalSize()
                                ? identity(words_[cursor_])
                                : WordIdentity{};
     struct Symbol {
@@ -157,9 +159,13 @@ void PinyinCandidatePresentation::refresh(bool resetPage) {
         std::vector<FirstPageCandidateInfo> rootInfos;
         for (const auto *word : ordinary) {
             const auto *pinyin = dynamic_cast<const PinyinAbstractCandidateWord *>(word);
+            const auto *spell = dynamic_cast<const SpellCandidateWord *>(word);
+            const auto *completion = dynamic_cast<const PinyinCandidateWord *>(word);
             rootInfos.push_back({pinyin && pinyin->isCustomPhrase(),
                                  word->isAbbreviation(), word->isBestAbbreviation(),
-                                 word->isFallback(), word->isDeferredFallback()});
+                                 word->isFallback(), word->isDeferredFallback(),
+                                 spell && spell->isRareEnglish(),
+                                 completion && completion->isRareCompletion()});
         }
         auto plan = abbreviationFirstPageOrder(rootInfos, pageSize_);
         if (foldSymbols_ && pageSize_ > 1) {
@@ -272,6 +278,8 @@ void PinyinCandidatePresentation::refresh(bool resetPage) {
         infos.reserve(words_.size());
         for (const auto *word : words_) {
             const auto *pinyin = dynamic_cast<const PinyinAbstractCandidateWord *>(word);
+            const auto *spell = dynamic_cast<const SpellCandidateWord *>(word);
+            const auto *completion = dynamic_cast<const PinyinCandidateWord *>(word);
             const auto *source = word->sourceCandidate();
             const bool deferredSource = source &&
                 ((source->isAbbreviation() && !source->isBestAbbreviation()) ||
@@ -282,7 +290,9 @@ void PinyinCandidatePresentation::refresh(bool resetPage) {
                              word->isDeferredFallback() || deferredSource ||
                                  (abbreviationPage && source &&
                                   (source != abbreviationSymbolSource ||
-                                   !abbreviationSources.contains(source)))});
+                                   !abbreviationSources.contains(source))),
+                             spell && spell->isRareEnglish(),
+                             completion && completion->isRareCompletion()});
         }
         auto mapping = abbreviationFirstPageOrder(infos, firstPageLength_);
         if (abbreviationPage && abbreviationSymbolSource) {
@@ -332,12 +342,16 @@ void PinyinCandidatePresentation::refresh(bool resetPage) {
     dirtyGenerationSeen_ = false;
     page_ = 0;
     cursor_ = words_.empty() ? -1 : pageIndices_.front();
+    // An untouched default follows the measured first row; only an explicit
+    // selection or a later page keeps its previous candidate identity.
+    cursorExplicit_ = false;
     if (!resetPage && oldCursor.word) {
         for (size_t index = 0; index < words_.size(); ++index) {
             const auto current = identity(words_[index]);
             if (current.word == oldCursor.word &&
                 current.symbol == oldCursor.symbol) {
                 cursor_ = static_cast<int>(index);
+                cursorExplicit_ = oldCursorExplicit;
                 break;
             }
         }
@@ -408,16 +422,19 @@ void PinyinCandidatePresentation::setPage(int page) {
     if (page < 0 || page >= totalPages()) return;
     page_ = page;
     if (cursor_ >= 0 && size() > 0) cursor_ = pageIndices_[pageStart(page_)];
+    cursorExplicit_ = false;
 }
 int PinyinCandidatePresentation::globalCursorIndex() const { return cursor_; }
 void PinyinCandidatePresentation::setGlobalCursorIndex(int index) {
-    if (index < 0) { cursor_ = -1; return; }
+    if (index < 0) { cursor_ = -1; cursorExplicit_ = false; return; }
     candidateFromAll(index);
     cursor_ = index;
+    cursorExplicit_ = true;
 }
 void PinyinCandidatePresentation::setCursorIndex(int index) {
     candidate(index);
     cursor_ = pageIndices_[pageStart(page_) + index];
+    cursorExplicit_ = true;
 }
 void PinyinCandidatePresentation::moveCursor(bool previous) {
     if (empty()) return;
@@ -432,6 +449,7 @@ void PinyinCandidatePresentation::moveCursor(bool previous) {
         if (ordinal == first) return;
     }
     cursor_ = pageIndices_[ordinal];
+    cursorExplicit_ = true;
     page_ = pageForIndex(cursor_);
 }
 void PinyinCandidatePresentation::prevCandidate() { moveCursor(true); }

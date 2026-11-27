@@ -113,6 +113,7 @@ private:
     int firstPageLength_ = 0;
     int page_ = 0;
     int cursor_ = -1;
+    bool cursorExplicit_ = false;
     bool usedNext_ = false;
     bool dirty_ = false;
     bool automaticSymbols_ = true;

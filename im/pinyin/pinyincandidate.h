@@ -208,10 +208,13 @@ public:
     void select(InputContext *inputContext) const override;
 
     std::string customPhraseString() const override { return word_; }
+    bool isRareEnglish() const { return rareEnglish_; }
+    void setRareEnglish(bool rare) { rareEnglish_ = rare; }
 
 private:
     PinyinEngine *engine_;
     std::string word_;
+    bool rareEnglish_ = false;
 };
 
 class PinyinCandidateWord : public PinyinAbstractCandidateWord,
@@ -234,6 +237,8 @@ public:
     void setAbbreviationHint(bool abbreviation, bool best) {
         setAbbreviation(abbreviation, best);
     }
+    bool isRareCompletion() const { return rareCompletion_; }
+    void setRareCompletion(bool rare) { rareCompletion_ = rare; }
 
     void setPinyinInComment();
 
@@ -242,6 +247,7 @@ private:
     InputContext *inputContext_;
     size_t idx_;
     bool isCustomPhrase_ = false;
+    bool rareCompletion_ = false;
 };
 
 class CustomCloudPinyinCandidateWord

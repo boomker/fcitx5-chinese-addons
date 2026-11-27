@@ -331,6 +331,51 @@ void testAbbreviationPageOrder() {
     candidates[10].bestAbbreviation = false;
     order = abbreviationFirstPageOrder(candidates, 5).indices;
     for (size_t i = 0; i < order.size(); ++i) FCITX_ASSERT(order[i] == i);
+    // Rare English cannot fill the holes left by deferred abbreviations.
+    // Common English remains an ordinary candidate in its original order.
+    std::vector<FirstPageCandidateInfo> english(5);
+    english[0].abbreviation = english[0].bestAbbreviation = true;
+    english[1].abbreviation = true;
+    english[2].rareEnglish = true;
+    const auto englishOrder = abbreviationFirstPageOrder(english, 4);
+    FCITX_ASSERT(englishOrder.firstPageSize == 3);
+    FCITX_ASSERT((englishOrder.indices == std::vector<size_t>{0, 3, 4, 1, 2}));
+    english[2].rareEnglish = false;
+    const auto commonOrder = abbreviationFirstPageOrder(english, 4);
+    FCITX_ASSERT(commonOrder.firstPageSize == 4);
+    FCITX_ASSERT((commonOrder.indices == std::vector<size_t>{0, 2, 3, 4, 1}));
+    // Low-frequency Chinese completions obey the same first-page boundary,
+    // while common completions keep the ordinary engine order.
+    std::vector<FirstPageCandidateInfo> completions(5);
+    completions[0].abbreviation = completions[0].bestAbbreviation = true;
+    completions[1].abbreviation = true;
+    completions[2].rareCompletion = true;
+    const auto rareCompletionOrder = abbreviationFirstPageOrder(completions, 4);
+    FCITX_ASSERT(rareCompletionOrder.firstPageSize == 3);
+    FCITX_ASSERT((rareCompletionOrder.indices ==
+                  std::vector<size_t>{0, 3, 4, 1, 2}));
+    completions[2].rareCompletion = false;
+    const auto commonCompletionOrder = abbreviationFirstPageOrder(completions, 4);
+    FCITX_ASSERT(commonCompletionOrder.firstPageSize == 4);
+    FCITX_ASSERT((commonCompletionOrder.indices ==
+                  std::vector<size_t>{0, 2, 3, 4, 1}));
+    // Deduplication can retain a completion path for the best abbreviation.
+    // Its first-page eligibility and fixed user slots take precedence.
+    completions[0].rareCompletion = completions[2].rareCompletion = true;
+    const auto bestCompletionOrder = abbreviationFirstPageOrder(completions, 4);
+    FCITX_ASSERT(bestCompletionOrder.firstPageSize == 3);
+    FCITX_ASSERT((bestCompletionOrder.indices == rareCompletionOrder.indices));
+    completions[2].fixed = true;
+    const auto fixedCompletionOrder = abbreviationFirstPageOrder(completions, 4);
+    FCITX_ASSERT(fixedCompletionOrder.firstPageSize == 4);
+    FCITX_ASSERT((fixedCompletionOrder.indices ==
+                  std::vector<size_t>{0, 3, 2, 4, 1}));
+    // Without a best abbreviation this policy does not alter ordinary pages.
+    completions[0].bestAbbreviation = false;
+    const auto ordinaryCompletionOrder = abbreviationFirstPageOrder(completions, 4);
+    FCITX_ASSERT(ordinaryCompletionOrder.firstPageSize == 4);
+    FCITX_ASSERT((ordinaryCompletionOrder.indices ==
+                  std::vector<size_t>{0, 1, 2, 3, 4}));
 }
 
 void testAbbreviationOrderIsCompleteAndStable() {
@@ -342,6 +387,8 @@ void testAbbreviationOrderIsCompleteAndStable() {
             candidate.fixed = next() % 5 == 0;
             candidate.abbreviation = next() % 4 == 0;
             candidate.deferredFallback = next() % 11 == 0;
+            candidate.rareEnglish = next() % 7 == 0;
+            candidate.rareCompletion = next() % 7 == 0;
         }
         const auto best = next() % candidates.size();
         candidates[best].abbreviation = true;
@@ -361,7 +408,8 @@ void testAbbreviationOrderIsCompleteAndStable() {
         for (const auto index : order) {
             const auto &candidate = candidates[index];
             if (!candidate.fixed && !candidate.abbreviation &&
-                !candidate.deferredFallback && !candidate.fallback)
+                !candidate.deferredFallback && !candidate.rareEnglish &&
+                !candidate.rareCompletion && !candidate.fallback)
                 ordinary.push_back(index);
         }
         FCITX_ASSERT(std::ranges::is_sorted(ordinary));

@@ -138,6 +138,44 @@ int main() {
             for (const char key : text)
                 frontend->call<ITestFrontend::keyEvent>(uuid, Key(static_cast<KeySym>(key)), false);
         };
+        // Measuring the first row can replace its provisional default candidate.
+        configure();
+        type("kaishi");
+        {
+            auto list = ic->inputPanel().candidateList();
+            const auto words = roots(ic);
+            FCITX_ASSERT(words.size() >= 3);
+            FCITX_ASSERT(&list->candidate(0) == words[0]);
+            FCITX_ASSERT(list->cursorIndex() == 0);
+            std::vector<const CandidateWord *> prefix = {words[1], words[0]};
+            FCITX_ASSERT(pinyin->call<IPinyinEngine::setCandidateViewport>(
+                ic, 2, prefix, nullptr, false));
+            FCITX_ASSERT(list->cursorIndex() == 0);
+            FCITX_ASSERT(&list->candidate(list->cursorIndex()) == words[1]);
+
+            // Explicit navigation retains the chosen word across row changes.
+            list->toCursorMovable()->nextCandidate();
+            prefix = {words[2], words[1], words[0]};
+            FCITX_ASSERT(pinyin->call<IPinyinEngine::setCandidateViewport>(
+                ic, 3, prefix, nullptr, false));
+            FCITX_ASSERT(list->cursorIndex() == 2);
+            FCITX_ASSERT(&list->candidate(list->cursorIndex()) == words[0]);
+
+            list->toCursorModifiable()->setCursorIndex(0);
+            prefix = {words[0], words[2], words[1]};
+            FCITX_ASSERT(pinyin->call<IPinyinEngine::setCandidateViewport>(
+                ic, 3, prefix, nullptr, false));
+            FCITX_ASSERT(list->cursorIndex() == 1);
+            FCITX_ASSERT(&list->candidate(list->cursorIndex()) == words[2]);
+
+            list->toBulkCursor()->setGlobalCursorIndex(0);
+            prefix = {words[1], words[0], words[2]};
+            FCITX_ASSERT(pinyin->call<IPinyinEngine::setCandidateViewport>(
+                ic, 3, prefix, nullptr, false));
+            FCITX_ASSERT(list->cursorIndex() == 1);
+            FCITX_ASSERT(&list->candidate(list->cursorIndex()) == words[0]);
+        }
+
         configure();
         type("kaishi");
         FCITX_ASSERT(pinyin->call<IPinyinEngine::candidateViewportPolicyEnabled>(ic));
@@ -396,6 +434,61 @@ int main() {
             bestAbbreviation->text().toString());
         list->toBulk()->candidateFromAll(invalidPairAbbreviationIndex).select(ic);
         FCITX_ASSERT(!ic->inputPanel().candidateList());
+        // Automatic floating pages must not promote rare spell completions
+        // into the slots vacated by deferred abbreviations.
+        for (const bool symbols : {false, true}) {
+            ic->reset();
+            instance.setCurrentInputMethod(ic, "shuangpin", true);
+            configure(symbols);
+            RawConfig spellConfig;
+            instance.inputMethodEngine(ic)->getConfigForInputMethod(
+                *instance.inputMethodEntry(ic))->save(spellConfig);
+            spellConfig.setValueByPath("PageSize", "6");
+            spellConfig.setValueByPath("SpellEnabled", "True");
+            instance.inputMethodEngine(ic)->setConfigForInputMethod(
+                *instance.inputMethodEntry(ic), spellConfig);
+            type("yw");
+            list = ic->inputPanel().candidateList();
+            const auto *rareEnglish = find(ic, "ywca");
+            const auto bulkBefore = roots(ic);
+            FCITX_ASSERT(pinyin->call<IPinyinEngine::setCandidateViewport>(
+                ic, 0, std::vector<const CandidateWord *>{}, nullptr, true));
+            for (int index = 0; index < list->size(); ++index)
+                FCITX_ASSERT(&list->candidate(index) != rareEnglish);
+            FCITX_ASSERT(roots(ic) == bulkBefore);
+            verifyPolicy(ic, 6);
+        }
+        // A rare long-word completion must not fill the floating homepage
+        // when an exact initial abbreviation is available.
+        for (const bool symbols : {false, true}) {
+            configure(symbols);
+            RawConfig completionConfig;
+            instance.inputMethodEngine(ic)->getConfigForInputMethod(
+                *instance.inputMethodEntry(ic))->save(completionConfig);
+            completionConfig.setValueByPath("PageSize", "6");
+            completionConfig.setValueByPath("LongWordLengthLimit", "3");
+            completionConfig.setValueByPath("ShuangpinInitialFuzzy", "True");
+            completionConfig.setValueByPath("PartialSpLength", "2");
+            completionConfig.setValueByPath("WordCandidateLimit", "22");
+            instance.inputMethodEngine(ic)->setConfigForInputMethod(
+                *instance.inputMethodEntry(ic), completionConfig);
+            type("wsm");
+            list = ic->inputPanel().candidateList();
+            const auto *completion = find(ic, "威斯敏斯特");
+            const auto *why = find(ic, "为什么");
+            FCITX_ASSERT(why->isBestAbbreviation());
+            const auto bulkBefore = roots(ic);
+            FCITX_ASSERT(pinyin->call<IPinyinEngine::setCandidateViewport>(
+                ic, 0, std::vector<const CandidateWord *>{}, nullptr, true));
+            bool bestVisible = false;
+            for (int index = 0; index < list->size(); ++index) {
+                FCITX_ASSERT(&list->candidate(index) != completion);
+                bestVisible |= &list->candidate(index) == why;
+            }
+            FCITX_ASSERT(bestVisible);
+            FCITX_ASSERT(roots(ic) == bulkBefore);
+            verifyPolicy(ic, 6);
+        }
         instance.exit();
     });
     instance.exec();

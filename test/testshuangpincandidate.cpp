@@ -27,7 +27,8 @@ public:
     float score(const State &state, const WordNode &node,
                 State &out) const override {
         out = state;
-        return node.word() == "你好吗" ? -7.0F : -3.0F;
+        const bool rare = node.word() == "你好吗" || node.word() == "你好吗呢";
+        return rare ? -7.0F : -3.0F;
     }
     bool isUnknown(WordIndex, std::string_view) const override { return false; }
 };
@@ -250,6 +251,46 @@ void testRareInitialWords() {
     context.clear();
     context.type("nhm");
     FCITX_ASSERT(!isRareShuangpinAbbreviation(find("你好吗"), *ime->model()));
+}
+
+void testRareLongWordCompletions() {
+    auto ime = makeIME();
+    ime->dict()->addWord(PinyinDictionary::SystemDict, "ni'hao'ma'ne", "你好吗呢");
+    ime->dict()->addWord(PinyinDictionary::SystemDict, "ni'hao'ma'ne", "你好嘛呢");
+    // The dictionary requires at least three matched syllables before it
+    // permits long-word completion, regardless of a lower configured limit.
+    ime->setPartialLongWordLimit(3);
+    PinyinContext context(ime.get());
+    context.setUseShuangpin(true);
+    const auto find = [&](std::string_view word) -> const SentenceResult & {
+        const auto &candidates = context.candidates();
+        const auto it =
+            std::ranges::find(candidates, word, &SentenceResult::toString);
+        FCITX_ASSERT(it != candidates.end()) << word;
+        return *it;
+    };
+    context.type("nihcma");
+    FCITX_ASSERT(isRareShuangpinCompletion(find("你好吗呢"), *ime->model()));
+    FCITX_ASSERT(!isRareShuangpinCompletion(find("你好嘛呢"), *ime->model()));
+    // Full spelling and an ordinary initial abbreviation are not completions,
+    // even when their word has the same low model frequency.
+    context.clear();
+    context.type("nihcmane");
+    FCITX_ASSERT(!isRareShuangpinCompletion(find("你好吗呢"), *ime->model()));
+    ime->setPartialLongWordLimit(0);
+    ime->setFuzzyFlags(PinyinFuzzyFlag::PartialSp);
+    ime->setPartialSpLength(3);
+    context.type("nhmn");
+    FCITX_ASSERT(!isRareShuangpinCompletion(find("你好吗呢"), *ime->model()));
+    // Selecting a completion records its reading and exempts it next time.
+    ime->setPartialLongWordLimit(3);
+    context.type("nihcma");
+    const auto index = &find("你好吗呢") - context.candidates().data();
+    context.select(index);
+    context.learn();
+    context.clear();
+    context.type("nihcma");
+    FCITX_ASSERT(!isRareShuangpinCompletion(find("你好吗呢"), *ime->model()));
 }
 
 void testSelectionScopeAndPersistence() {
@@ -691,6 +732,7 @@ int main() {
     testInvalidPairCorrection();
     testFullInputRecoveryKeepsConsumptionAndPinyin();
     testRareInitialWords();
+    testRareLongWordCompletions();
     testSelectionScopeAndPersistence();
     testAdaptiveCandidateOrder();
     testCorrectionPromotionIsGradual();

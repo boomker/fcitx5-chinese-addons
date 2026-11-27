@@ -344,7 +344,8 @@ abbreviationFirstPageOrder(std::span<const FirstPageCandidateInfo> candidates,
         if (!reserved[index]) frontSlots.push_back(index);
     const auto delayed = [&](size_t index) {
         return (candidates[index].abbreviation && index != bestIndex) ||
-               candidates[index].deferredFallback;
+               candidates[index].deferredFallback || candidates[index].rareEnglish ||
+               (candidates[index].rareCompletion && index != bestIndex);
     };
     std::vector<size_t> front;
     for (size_t index = 0; index < count && front.size() < frontSlots.size(); ++index)

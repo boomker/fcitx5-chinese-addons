@@ -1873,6 +1873,8 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                 pinyinCandidate->setAbbreviationHint(
                     context.isShuangpinAbbreviation(candidate),
                     context.isBestShuangpinAbbreviation(candidate));
+                pinyinCandidate->setRareCompletion(
+                    isRareShuangpinCompletion(candidate, *ime_->model()));
             }
             if (iter != customCandidateMap.end()) {
                 if (dynamic_cast<CustomPhraseCandidateWord *>(
@@ -2024,6 +2026,9 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
                           : 0),
                  foldSymbolCandidates && extra.symbols &&
                      !extra.symbols->empty()});
+            if (auto *spell = dynamic_cast<SpellCandidateWord *>(candidate.get())) {
+                spell->setRareEnglish(infos.back().kind == CandidateKind::RareEnglish);
+            }
         }
         // The front page is what a user sees without paging or expanding.
         constexpr size_t minFrontSize = 5;
