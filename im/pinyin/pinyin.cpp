@@ -2582,6 +2582,7 @@ void PinyinEngine::applyImeRuntime() {
     ime_->setNBest(*config_.nbest);
     ime_->setWordCandidateLimit(*config_.wordCandidateLimit);
     ime_->setPartialLongWordLimit(*config_.longWordLimit);
+    ime_->setPartialLongWordCandidateLimit(*config_.longWordCandidateLimit);
     ime_->setPartialSpLength(*config_.partialSpLength);
     ime_->setPreeditMode(*config_.showActualPinyinInPreedit
                              ? libime::PinyinPreeditMode::Pinyin

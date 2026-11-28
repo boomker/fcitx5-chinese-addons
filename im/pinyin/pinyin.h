@@ -164,7 +164,7 @@ FCITX_CONFIGURATION(
     Option<bool> partialFinal{this, "PartialFinal",
                               _("Match partial finals (e -> en, eng, ei)"),
                               false};
-    Option<bool> v{this, "V_U", _("u <-> v"), false};
+    Option<bool> v{this, "V_U", _("u <-> v"), true};
     Option<bool> an{this, "AN_ANG", _("an <-> ang"), false};
     Option<bool> en{this, "EN_ENG", _("en <-> eng"), false};
     Option<bool> ian{this, "IAN_IANG", _("ian <-> iang"), false};
@@ -194,7 +194,7 @@ FCITX_CONFIGURATION(
         shuangpinProfile{this, "ShuangpinProfile", _("Shuangpin Profile"),
                          ShuangpinProfileEnum::Ziranma};
     OptionWithAnnotation<bool, OptionalHideInDescription> showShuangpinMode{
-        this, "ShowShuangpinMode", _("Show current shuangpin mode"), true};
+        this, "ShowShuangpinMode", _("Show current shuangpin mode"), false};
     ConditionalHidden<isIOS(), Option<int, IntConstrain>> pageSize{
         this, "PageSize", _("Candidates Per Page"), 7, IntConstrain(3, 10)};
     Option<bool> spellEnabled{this, "SpellEnabled",
@@ -234,8 +234,8 @@ FCITX_CONFIGURATION(
         this, "PreeditMode", _("Preedit Mode"),
         isAndroid() ? PreeditMode::No : PreeditMode::ComposingPinyin};
     OptionWithAnnotation<PinyinAnnotation, PinyinAnnotationI18NAnnotation>
-        pinyinAnnotation{this, "PinyinAnnotation", _("Pinyin Annotation"),
-                         PinyinAnnotation::Rare};
+        pinyinAnnotation{this, "PinyinAnnotation",
+                         _("Pinyin Annotation Target"), PinyinAnnotation::Rare};
     OptionWithAnnotation<PinyinAnnotationPlacement,
                          PinyinAnnotationPlacementI18NAnnotation>
         pinyinAnnotationPlacement{this, "PinyinAnnotationPlacement",
@@ -356,7 +356,7 @@ FCITX_CONFIGURATION(
         {Key("grave")},
         KeyListConstrain({KeyConstrainFlag::AllowModifierLess})};
     Option<int, IntConstrain> nbest{this, "Number of sentence",
-                                    _("Number of Sentences"), 2,
+                                    _("Number of Full-Sentence Candidates"), 2,
                                     IntConstrain(1, 3)};
     Option<int, IntConstrain, DefaultMarshaller<int>, ToolTipAnnotation>
         wordCandidateLimit{this,
@@ -366,17 +366,31 @@ FCITX_CONFIGURATION(
                            IntConstrain(0),
                            {},
                            {_("Set to 0 will show all candidates.")}};
-    Option<int, IntConstrain> longWordLimit{
-        this, "LongWordLengthLimit",
-        _("Prompt long word length when input length over (0 for disable)"), 4,
-        IntConstrain(0, 10)};
+    Option<int, IntConstrain, DefaultMarshaller<int>, ToolTipAnnotation>
+        longWordLimit{this,
+                      "LongWordLengthLimit",
+                      _("Long Word Completion Start Length (0 to disable)"),
+                      3,
+                      IntConstrain(0, 10),
+                      {},
+                      {_("Prefix completion candidates start at the Nth "
+                         "syllable (N is the "
+                         "configured value; values below 3 use 3).")}};
+    Option<int, IntConstrain, DefaultMarshaller<int>, ToolTipAnnotation>
+        longWordCandidateLimit{
+            this,
+            "LongWordCandidateLimit",
+            _("Maximum Number of Long Word Completion Candidates"),
+            7,
+            IntConstrain(0),
+            {},
+            {_("Set to 0 to disable prefix completion candidates.")}};
     Option<int, IntConstrain, DefaultMarshaller<int>, OptionalHideInDescription>
         partialSpLength{this, "PartialSpLength",
-                        _("Minimum length for abbreviated pinyin"), 0,
+                        _("Minimum length for abbreviated pinyin"), 2,
                         IntConstrain(0, 4)};
-    OptionWithAnnotation<bool, OptionalHideInDescription>
-        shuangpinInitialFuzzy{this, "ShuangpinInitialFuzzy",
-                              _("Fuzzy abbreviations"), false};
+    OptionWithAnnotation<bool, OptionalHideInDescription> shuangpinInitialFuzzy{
+        this, "ShuangpinInitialFuzzy", _("Fuzzy abbreviations"), false};
     ExternalOption dictmanager{this, "DictManager", _("Manage Dictionaries"),
                                "fcitx://config/addon/pinyin/dictmanager"};
     ExternalOption customphrase{this, "CustomPhrase", _("Manage Custom Phrase"),
@@ -395,7 +409,7 @@ FCITX_CONFIGURATION(
         Key{FcitxKey_semicolon},
         {KeyConstrainFlag::AllowModifierLess}};
     Option<bool> useVAsQuickphrase{this, "VAsQuickphrase",
-                                   _("Use V to trigger quickphrase"), true};
+                                   _("Use V to trigger quickphrase"), false};
     ExternalOption quickphrase{this, "QuickPhrase", _("Quick Phrase"),
                                "fcitx://config/addon/quickphrase/editor"};
     Option<std::vector<std::string>, ListConstrain<RegexConstrain>,

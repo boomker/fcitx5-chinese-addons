@@ -701,8 +701,8 @@ msgid "Preedit Mode"
 msgstr "预编辑模式"
 
 #: im/pinyin/pinyin.h
-msgid "Pinyin Annotation"
-msgstr "拼音标注"
+msgid "Pinyin Annotation Target"
+msgstr "拼音标注对象"
 
 #: im/pinyin/pinyin.h:212
 msgid "Show complete pinyin in preedit"
@@ -767,8 +767,8 @@ msgid "Filter by stroke"
 msgstr "按笔画过滤"
 
 #: im/pinyin/pinyin.h:322
-msgid "Number of Sentences"
-msgstr "句子数量"
+msgid "Number of Full-Sentence Candidates"
+msgstr "整句候选数"
 
 #: im/pinyin/pinyin.h:327
 msgid "Number of Phrase Candidates"
@@ -779,8 +779,17 @@ msgid "Set to 0 will show all candidates."
 msgstr "设置为 0 时将显示全部候选词"
 
 #: im/pinyin/pinyin.h:334
-msgid "Prompt long word length when input length over (0 for disable)"
-msgstr "输入长于...时提示长词 (设置为 0 时禁用)"
+msgid "Long Word Completion Start Length (0 to disable)"
+msgstr "长词提示起始长度（设为 0 时禁用）"
+
+msgid "Prefix completion candidates start at the Nth syllable (N is the configured value; values below 3 use 3)."
+msgstr "前缀补全类候选从第 N 个音节开始（N 为用户设定的值；小于 3 时按 3 计算）。"
+
+msgid "Maximum Number of Long Word Completion Candidates"
+msgstr "长词提示最多个数"
+
+msgid "Set to 0 to disable prefix completion candidates."
+msgstr "设为 0 时不显示前缀补全类候选。"
 
 #: im/pinyin/pinyin.h:336
 msgid "Manage Dictionaries"
